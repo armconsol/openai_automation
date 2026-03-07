@@ -12,6 +12,7 @@
     model_selection_file: "{{ playbook_dir }}/../benchmarks/results/model_selection.json"
     modelfiles_dir: /mnt/ai_data/ollama_models/modelfiles
     slot4_model: ""
+    ollama_api_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
 
   tasks:
     # ── Load benchmark results ───────────────────────────────────────
@@ -181,7 +182,7 @@
 
     - name: "Models | Template warmup systemd service"
       ansible.builtin.template:
-        src: "{{ playbook_dir }}/../templates/ollama/ollama-warmup.service.j2"
+        src: "{{ playbook_dir }}/../templates/systemd/ollama-warmup.service.j2"
         dest: /etc/systemd/system/ollama-warmup.service
         mode: "0644"
         owner: root

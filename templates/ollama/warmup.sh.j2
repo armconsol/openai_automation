@@ -18,9 +18,11 @@ warmup_model() {
     echo "[warmup] Done: $model"
 }
 
-warmup_model "{{ slot1_model }}"
-warmup_model "{{ slot2_model }}"
-warmup_model "{{ slot3_model }}"
-warmup_model "{{ slot4_model }}"
+warmup_model "{{ model_selection.slot1_general }}"
+warmup_model "{{ model_selection.slot2_general }}"
+warmup_model "{{ model_selection.slot3_coding }}"
+{% if model_selection.slot4_coding | length > 0 and model_selection.slot4_coding != 'none' %}
+warmup_model "{{ model_selection.slot4_coding }}"
+{% endif %}
 
 echo "[warmup] All models warmed up."
