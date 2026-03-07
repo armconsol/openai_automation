@@ -1,0 +1,14 @@
+[Unit]
+Description=Ollama Model Warm-Up
+After=ollama.service
+Requires=ollama.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/ollama-warmup.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

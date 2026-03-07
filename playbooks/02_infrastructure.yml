@@ -1,0 +1,168 @@
+---
+# playbooks/02_infrastructure.yml
+# Install Docker and configure Ollama on ai_server
+
+- name: "Infrastructure | Docker and Ollama setup on ai_server"
+  hosts: ai_server
+  become: true
+  gather_facts: true
+  tags:
+    - infrastructure
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+    ollama_num_threads: 28
+    ollama_num_parallel: 4
+    ollama_max_loaded_models: 4
+    ollama_keep_alive: "-1"
+    ollama_numa_node: "1"
+    ollama_cpu_affinity: "1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51 53 55"
+
+  pre_tasks:
+    - name: "Infrastructure | Install Python Docker SDK prerequisites"
+      ansible.builtin.dnf:
+        name:
+          - python3-pip
+          - python3-requests
+        state: present
+      tags: always
+
+    - name: "Infrastructure | Install Python docker SDK via pip"
+      ansible.builtin.pip:
+        name: docker
+        state: present
+        executable: pip3
+      tags: always
+
+  tasks:
+    # ── Docker installation ──────────────────────────────────────────
+    - name: "Docker | Check if Docker CE repo is already configured"
+      ansible.builtin.stat:
+        path: /etc/yum.repos.d/docker-ce.repo
+      register: docker_repo_file
+      tags:
+        - docker
+
+    - name: "Docker | Add Docker CE repository"
+      ansible.builtin.command:
+        cmd: dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
+      when: not docker_repo_file.stat.exists
+      changed_when: true
+      tags:
+        - docker
+
+    - name: "Docker | Install Docker CE packages"
+      ansible.builtin.dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+      tags:
+        - docker
+
+    - name: "Docker | Add {{ ansible_user }} to docker group"
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+      tags:
+        - docker
+
+    - name: "Docker | Add ollama user to docker group"
+      ansible.builtin.user:
+        name: ollama
+        groups: docker
+        append: true
+      tags:
+        - docker
+
+    - name: "Docker | Start and enable docker.service"
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+      tags:
+        - docker
+
+    # ── Ollama installation and configuration ────────────────────────
+    - name: "Ollama | Check if ollama binary exists"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/local/bin/ollama
+        - /usr/bin/ollama
+      register: ollama_binary_check
+      tags:
+        - ollama
+
+    - name: "Ollama | Set ollama installed fact"
+      ansible.builtin.set_fact:
+        ollama_installed: "{{ ollama_binary_check.results | selectattr('stat.exists', 'equalto', true) | list | length > 0 }}"
+      tags:
+        - ollama
+
+    - name: "Ollama | Install Ollama"
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://ollama.ai/install.sh | sh
+      when: not ollama_installed
+      changed_when: true
+      tags:
+        - ollama
+
+    - name: "Ollama | Retrieve OLLAMA_API_KEY from Vault"
+      ansible.builtin.set_fact:
+        ollama_api_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - ollama
+
+    - name: "Ollama | Create systemd override directory"
+      ansible.builtin.file:
+        path: /etc/systemd/system/ollama.service.d
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      tags:
+        - ollama
+
+    - name: "Ollama | Template systemd override configuration"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama/override.conf.j2"
+        dest: /etc/systemd/system/ollama.service.d/override.conf
+        mode: "0644"
+        owner: root
+        group: root
+      notify:
+        - Reload systemd and restart ollama
+      tags:
+        - ollama
+
+    - name: "Ollama | Ensure Ollama is running"
+      ansible.builtin.systemd:
+        name: ollama
+        state: started
+        enabled: true
+      tags:
+        - ollama
+
+    - name: "Ollama | Wait for Ollama API to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:11434/api/tags"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: ollama_ready
+      retries: 24
+      delay: 5
+      until: ollama_ready.status == 200
+      tags:
+        - ollama
+
+  handlers:
+    - name: Reload systemd and restart ollama
+      ansible.builtin.systemd:
+        name: ollama
+        state: restarted
+        daemon_reload: true

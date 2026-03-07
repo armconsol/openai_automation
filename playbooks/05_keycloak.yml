@@ -1,0 +1,366 @@
+---
+# playbooks/05_keycloak.yml
+# Deploy Keycloak on ai_server, create realm, client, roles, and admin user
+
+- name: "Keycloak | Deploy and configure Keycloak"
+  hosts: ai_server
+  become: true
+  gather_facts: true
+  tags:
+    - keycloak
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+    keycloak_container_name: keycloak
+    keycloak_port: 8180
+    keycloak_data_dir: /mnt/ai_data/keycloak
+    keycloak_realm: "{{ vault_project_slug }}"
+    keycloak_base_url: "http://localhost:8180"
+
+  tasks:
+    # ── Secret resolution: Vault if available, otherwise generate locally ─
+    - name: "Keycloak | Check if Vault token exists"
+      ansible.builtin.stat:
+        path: "{{ vault_token_file }}"
+      register: vault_token_stat
+      delegate_to: localhost
+      become: false
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Set vault_available fact"
+      ansible.builtin.set_fact:
+        vault_available: "{{ vault_token_stat.stat.exists }}"
+      tags:
+        - keycloak-secrets
+
+    # -- From Vault (when available) --
+    - name: "Keycloak | Retrieve admin password from Vault"
+      ansible.builtin.set_fact:
+        keycloak_admin_password: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:admin_password token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      when: vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Retrieve client secret from Vault"
+      ansible.builtin.set_fact:
+        keycloak_client_secret: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:client_secret token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      when: vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Retrieve realm admin password from Vault"
+      ansible.builtin.set_fact:
+        keycloak_realm_admin_password: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:realm_admin_password token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      when: vault_available
+      tags:
+        - keycloak-secrets
+
+    # -- Generate locally (when Vault not available) --
+    - name: "Keycloak | Generate admin password locally"
+      ansible.builtin.command: openssl rand -base64 16
+      register: _kc_admin_pass_gen
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Generate client secret locally"
+      ansible.builtin.command: openssl rand -hex 32
+      register: _kc_client_secret_gen
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Generate realm admin password locally"
+      ansible.builtin.command: openssl rand -base64 16
+      register: _kc_realm_pass_gen
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when: not vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Set locally generated secrets as facts"
+      ansible.builtin.set_fact:
+        keycloak_admin_password: "{{ _kc_admin_pass_gen.stdout }}"
+        keycloak_client_secret: "{{ _kc_client_secret_gen.stdout }}"
+        keycloak_realm_admin_password: "{{ _kc_realm_pass_gen.stdout }}"
+      when: not vault_available
+      tags:
+        - keycloak-secrets
+
+    - name: "Keycloak | Save generated credentials to vault/keycloak-credentials.txt"
+      ansible.builtin.copy:
+        content: |
+          # Keycloak credentials — generated {{ ansible_date_time.iso8601 }}
+          # Vault was not available; store these securely.
+          keycloak_admin_password={{ keycloak_admin_password }}
+          keycloak_client_secret={{ keycloak_client_secret }}
+          keycloak_realm_admin_password={{ keycloak_realm_admin_password }}
+        dest: "{{ playbook_dir }}/../vault/keycloak-credentials.txt"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      when: not vault_available
+      tags:
+        - keycloak-secrets
+
+    # ── Container deployment ─────────────────────────────────────────
+    - name: "Keycloak | Create data directory"
+      ansible.builtin.file:
+        path: "{{ keycloak_data_dir }}"
+        state: directory
+        mode: "0755"
+        owner: "1000"
+        group: "1000"
+      tags:
+        - keycloak-deploy
+
+    - name: "Keycloak | Run Keycloak container"
+      community.docker.docker_container:
+        name: "{{ keycloak_container_name }}"
+        image: quay.io/keycloak/keycloak:latest
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ keycloak_port }}:8080"
+        env:
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: "{{ keycloak_admin_password }}"
+          KC_PROXY_HEADERS: xforwarded
+          KC_HOSTNAME: "https://idm.{{ domain }}"
+          KC_HTTP_ENABLED: "true"
+        volumes:
+          - "{{ keycloak_data_dir }}:/opt/keycloak/data"
+        command: start
+      tags:
+        - keycloak-deploy
+
+    - name: "Keycloak | Wait for Keycloak to be ready"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/realms/master"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: keycloak_ready
+      retries: 30
+      delay: 10
+      until: keycloak_ready.status == 200
+      tags:
+        - keycloak-deploy
+
+    # ── Admin token ──────────────────────────────────────────────────
+    - name: "Keycloak | Get admin access token"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: password
+          client_id: admin-cli
+          username: admin
+          password: "{{ keycloak_admin_password }}"
+        status_code: 200
+      register: keycloak_admin_token
+      tags:
+        - keycloak-configure
+
+    - name: "Keycloak | Set admin token fact"
+      ansible.builtin.set_fact:
+        kc_token: "{{ keycloak_admin_token.json.access_token }}"
+      tags:
+        - keycloak-configure
+
+    # ── Create realm ─────────────────────────────────────────────────
+    - name: "Keycloak | Check if realm exists"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: [200, 404]
+      register: realm_check
+      tags:
+        - keycloak-realm
+
+    - name: "Keycloak | Create realm {{ keycloak_realm }}"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          realm: "{{ keycloak_realm }}"
+          displayName: "{{ keycloak_realm_display }}"
+          enabled: true
+        status_code: [201, 409]
+      when: realm_check.status == 404
+      tags:
+        - keycloak-realm
+
+    # ── Create client ────────────────────────────────────────────────
+    - name: "Keycloak | Check if open-webui client exists"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId=open-webui"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: client_check
+      tags:
+        - keycloak-client
+
+    - name: "Keycloak | Create open-webui client"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          clientId: open-webui
+          enabled: true
+          protocol: openid-connect
+          publicClient: false
+          clientAuthenticatorType: client-secret
+          secret: "{{ keycloak_client_secret }}"
+          redirectUris:
+            - "{{ keycloak_redirect_uri }}"
+          webOrigins:
+            - "{{ openwebui_url }}"
+          standardFlowEnabled: true
+          directAccessGrantsEnabled: false
+        status_code: [201, 409]
+      when: client_check.json | length == 0
+      tags:
+        - keycloak-client
+
+    # ── Create realm roles ───────────────────────────────────────────
+    - name: "Keycloak | Create ai-user role"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/roles"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: ai-user
+          description: "Standard AI platform user"
+        status_code: [201, 409]
+      tags:
+        - keycloak-roles
+
+    - name: "Keycloak | Create ai-admin role"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/roles"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: ai-admin
+          description: "AI platform administrator"
+        status_code: [201, 409]
+      tags:
+        - keycloak-roles
+
+    # ── Create realm admin user ──────────────────────────────────────
+    - name: "Keycloak | Check if realm admin user exists"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/users?username={{ keycloak_realm_admin_user }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: admin_user_check
+      tags:
+        - keycloak-users
+
+    - name: "Keycloak | Create realm admin user"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/users"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          username: "{{ keycloak_realm_admin_user }}"
+          enabled: true
+          emailVerified: true
+          credentials:
+            - type: password
+              value: "{{ keycloak_realm_admin_password }}"
+              temporary: false
+        status_code: [201, 409]
+      when: admin_user_check.json | length == 0
+      tags:
+        - keycloak-users
+
+    - name: "Keycloak | Get realm admin user ID"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/users?username={{ keycloak_realm_admin_user }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: admin_user_info
+      tags:
+        - keycloak-users
+
+    - name: "Keycloak | Get ai-admin role representation"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/roles/ai-admin"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: ai_admin_role
+      tags:
+        - keycloak-users
+
+    - name: "Keycloak | Assign ai-admin role to realm admin user"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/users/{{ admin_user_info.json[0].id }}/role-mappings/realm"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          - id: "{{ ai_admin_role.json.id }}"
+            name: ai-admin
+        status_code: [200, 204]
+      when: admin_user_info.json | length > 0
+      tags:
+        - keycloak-users
+
+    # ── Store OIDC URL in Vault ──────────────────────────────────────
+    - name: "Keycloak | Store OIDC URL in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_api_addr }}/v1/{{ vault_secret_prefix }}/keycloak"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ lookup('ansible.builtin.file', vault_token_file) }}"
+        body_format: json
+        body:
+          data:
+            admin_password: "{{ keycloak_admin_password }}"
+            client_secret: "{{ keycloak_client_secret }}"
+            realm_admin_password: "{{ keycloak_realm_admin_password }}"
+            oidc_url: "{{ keycloak_oidc_url }}"
+        status_code: [200, 204]
+      tags:
+        - keycloak-vault

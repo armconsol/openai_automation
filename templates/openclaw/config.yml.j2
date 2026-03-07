@@ -1,0 +1,17 @@
+telegram:
+  token: "{{ telegram_token }}"
+
+ollama:
+  base_url: "http://localhost:11434"
+  model: "{{ openclaw_model | default('llama3.2:3b') }}"
+  api_key: "{{ ollama_api_key }}"
+  timeout: 120
+
+bot:
+  max_message_length: 4096
+  typing_indicator: true
+  error_message: "Sorry, I encountered an error. Please try again."
+
+logging:
+  level: "INFO"
+  file: "/var/log/openclaw/openclaw.log"

@@ -1,0 +1,171 @@
+---
+# playbooks/08_openclaw.yml
+# Deploy OpenClaw Telegram bot on ai_server (optional)
+
+- name: "OpenClaw | Deploy OpenClaw Telegram bot"
+  hosts: ai_server
+  become: true
+  gather_facts: true
+  tags:
+    - openclaw
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+    openclaw_data_dir: /mnt/ai_data/openclaw
+
+  vars_prompt:
+    - name: telegram_token_input
+      prompt: "Telegram Bot Token (from @BotFather). Press ENTER to use token already in Vault"
+      private: false
+      default: ""
+
+  tasks:
+    # ── Store token in Vault if provided ─────────────────────────────
+    - name: "OpenClaw | Store Telegram token in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ vault_secret_prefix }}/openclaw"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ lookup('ansible.builtin.file', vault_token_file) }}"
+        body_format: json
+        body:
+          data:
+            telegram_token: "{{ telegram_token_input }}"
+        status_code: [200, 204]
+      when: telegram_token_input | length > 0
+      tags:
+        - openclaw-vault
+
+    # ── Read token from Vault (whether just stored or pre-existing) ───
+    - name: "OpenClaw | Check for Telegram token in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ vault_secret_prefix }}/openclaw"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ lookup('ansible.builtin.file', vault_token_file) }}"
+        status_code: [200, 404]
+      register: vault_openclaw_secret
+      tags:
+        - openclaw-vault
+
+    - name: "OpenClaw | Set skip flag"
+      ansible.builtin.set_fact:
+        skip_openclaw: "{{ vault_openclaw_secret.status == 404 or
+                           vault_openclaw_secret.json.data.data.telegram_token | default('') | length == 0 }}"
+      tags:
+        - openclaw-vault
+
+    - name: "OpenClaw | Display skip message"
+      ansible.builtin.debug:
+        msg: "Skipping OpenClaw installation (no Telegram token in Vault or provided)"
+      when: skip_openclaw
+      tags:
+        - openclaw-vault
+
+    - name: "OpenClaw | Set telegram_token fact"
+      ansible.builtin.set_fact:
+        telegram_token: "{{ vault_openclaw_secret.json.data.data.telegram_token }}"
+      when: not skip_openclaw
+      tags:
+        - openclaw-vault
+
+    # ── Retrieve Ollama API key from Vault ────────────────────────────
+    - name: "OpenClaw | Retrieve Ollama API key from Vault"
+      ansible.builtin.set_fact:
+        ollama_api_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    # ── Install Python dependencies ───────────────────────────────────
+    - name: "OpenClaw | Install Python dependencies"
+      ansible.builtin.pip:
+        name:
+          - python-telegram-bot
+          - requests
+          - pyyaml
+        state: present
+        executable: pip3
+      when: not skip_openclaw
+      tags:
+        - openclaw-install
+
+    # ── Deploy bot script and config ─────────────────────────────────
+    - name: "OpenClaw | Create data directory"
+      ansible.builtin.file:
+        path: "{{ openclaw_data_dir }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    - name: "OpenClaw | Create log directory"
+      ansible.builtin.file:
+        path: /var/log/openclaw
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    - name: "OpenClaw | Deploy bot script"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../templates/openclaw/bot.py"
+        dest: "{{ openclaw_data_dir }}/bot.py"
+        mode: "0755"
+        owner: root
+        group: root
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    - name: "OpenClaw | Template config.yml"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/openclaw/config.yml.j2"
+        dest: "{{ openclaw_data_dir }}/config.yml"
+        mode: "0640"
+        owner: root
+        group: root
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    # ── Systemd service ───────────────────────────────────────────────
+    - name: "OpenClaw | Template systemd service"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/openclaw/openclaw.service.j2"
+        dest: /etc/systemd/system/openclaw.service
+        mode: "0644"
+        owner: root
+        group: root
+      when: not skip_openclaw
+      tags:
+        - openclaw-service
+
+    - name: "OpenClaw | Reload systemd daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: not skip_openclaw
+      tags:
+        - openclaw-service
+
+    - name: "OpenClaw | Enable and start OpenClaw service"
+      ansible.builtin.systemd:
+        name: openclaw
+        enabled: true
+        state: started
+      when: not skip_openclaw
+      tags:
+        - openclaw-service
+
+    - name: "OpenClaw | Display status"
+      ansible.builtin.debug:
+        msg: "OpenClaw Telegram bot is installed and running. Message your bot to test it."
+      when: not skip_openclaw
+      tags:
+        - openclaw-service

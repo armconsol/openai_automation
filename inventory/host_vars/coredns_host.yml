@@ -1,0 +1,16 @@
+---
+# ============================================================
+# Host Variables — coredns_host
+# Docker host — HashiCorp Vault, CoreDNS, misc containers
+# ============================================================
+
+# Vault container configuration
+vault_container_name: vault
+vault_image: hashicorp/vault:1.15.6
+# Vault moved to ai_server — no longer hosted here
+
+# CoreDNS container name
+coredns_container_name: coredns
+
+# Disk checks
+required_root_free_gb: 10

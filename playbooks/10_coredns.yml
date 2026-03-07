@@ -1,0 +1,64 @@
+---
+# playbooks/10_coredns.yml
+# Update CoreDNS records on coredns_host
+
+- name: "CoreDNS | Update DNS records"
+  hosts: coredns_host
+  become: true
+  gather_facts: false
+  tags:
+    - coredns
+  vars:
+    dns_records:
+      - name: "vault.{{ domain }}."
+        type: A
+        ttl: 3600
+        value: "{{ nginx_proxy_ip }}"
+      - name: "ollama-api.{{ domain }}."
+        type: A
+        ttl: 3600
+        value: "{{ nginx_proxy_ip }}"
+      - name: "idm.{{ domain }}."
+        type: A
+        ttl: 3600
+        value: "{{ nginx_proxy_ip }}"
+
+  tasks:
+    - name: "CoreDNS | Add vault DNS record"
+      ansible.builtin.lineinfile:
+        path: "{{ coredns_zone_file }}"
+        line: "vault.{{ domain }}.    3600    IN    A    {{ nginx_proxy_ip }}"
+        regexp: "^vault\\.{{ domain | replace('.', '\\.') }}\\."
+        insertafter: EOF
+        state: present
+      register: vault_dns_record
+      tags:
+        - coredns-records
+
+    - name: "CoreDNS | Add ollama-api DNS record"
+      ansible.builtin.lineinfile:
+        path: "{{ coredns_zone_file }}"
+        line: "ollama-api.{{ domain }}.    3600    IN    A    {{ nginx_proxy_ip }}"
+        regexp: "^ollama-api\\.{{ domain | replace('.', '\\.') }}\\."
+        insertafter: EOF
+        state: present
+      register: ollama_dns_record
+      tags:
+        - coredns-records
+
+    - name: "CoreDNS | Add idm (Keycloak) DNS record"
+      ansible.builtin.lineinfile:
+        path: "{{ coredns_zone_file }}"
+        line: "idm.{{ domain }}.    3600    IN    A    {{ nginx_proxy_ip }}"
+        regexp: "^idm\\.{{ domain | replace('.', '\\.') }}\\."
+        insertafter: EOF
+        state: present
+      register: idm_dns_record
+      tags:
+        - coredns-records
+
+    - name: "CoreDNS | Restart CoreDNS container to reload zone file"
+      ansible.builtin.command: docker restart {{ coredns_container_name }}
+      changed_when: true
+      tags:
+        - coredns-reload

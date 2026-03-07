@@ -1,0 +1,204 @@
+---
+# playbooks/04_models.yml
+# Pull and register Ollama models based on benchmark selection
+
+- name: "Models | Pull and register Ollama models"
+  hosts: ai_server
+  become: true
+  gather_facts: true
+  tags:
+    - models
+  vars:
+    model_selection_file: "{{ playbook_dir }}/../benchmarks/results/model_selection.json"
+    modelfiles_dir: /mnt/ai_data/ollama_models/modelfiles
+    slot4_model: ""
+
+  tasks:
+    # ── Load benchmark results ───────────────────────────────────────
+    - name: "Models | Read model_selection.json from control node"
+      ansible.builtin.slurp:
+        src: "{{ model_selection_file }}"
+      delegate_to: localhost
+      become: false
+      register: model_selection_raw
+      tags:
+        - models-load
+
+    - name: "Models | Parse model selection data"
+      ansible.builtin.set_fact:
+        model_selection: "{{ model_selection_raw.content | b64decode | from_json }}"
+      tags:
+        - models-load
+
+    - name: "Models | Apply slot4 override if provided"
+      ansible.builtin.set_fact:
+        model_selection: "{{ model_selection | combine({'slot4_coding': slot4_model}) }}"
+      when: slot4_model | length > 0
+      tags:
+        - models-load
+
+    - name: "Models | Display selected models"
+      ansible.builtin.debug:
+        msg:
+          - "Slot 1 (General Primary):   {{ model_selection.slot1_general }}"
+          - "Slot 2 (General Secondary):  {{ model_selection.slot2_general }}"
+          - "Slot 3 (Coding Primary):    {{ model_selection.slot3_coding }}"
+          - "Slot 4 (Coding Secondary):  {{ model_selection.slot4_coding }}"
+      tags:
+        - models-load
+
+    # ── Pull models ──────────────────────────────────────────────────
+    - name: "Models | Get currently installed models"
+      ansible.builtin.command: ollama list
+      changed_when: false
+      register: current_models
+      tags:
+        - models-pull
+
+    - name: "Models | Set installed models list"
+      ansible.builtin.set_fact:
+        installed_model_names: >-
+          {{ current_models.stdout_lines[1:] |
+             default([]) |
+             map('split') |
+             map('first') |
+             list }}
+      tags:
+        - models-pull
+
+    - name: "Models | Pull slot models if not already present"
+      ansible.builtin.command: "ollama pull {{ item }}"
+      loop:
+        - "{{ model_selection.slot1_general }}"
+        - "{{ model_selection.slot2_general }}"
+        - "{{ model_selection.slot3_coding }}"
+        - "{{ model_selection.slot4_coding }}"
+      when:
+        - item | length > 0
+        - item != 'none'
+        - item not in installed_model_names
+      changed_when: true
+      loop_control:
+        label: "Pulling {{ item }}"
+      tags:
+        - models-pull
+
+    - name: "Models | Pull fixed models if not already present"
+      ansible.builtin.command: "ollama pull {{ item }}"
+      loop:
+        - "llama3.2:3b"
+        - "gemma3:12b-it-q4_K_M"
+      when: item not in installed_model_names
+      changed_when: true
+      loop_control:
+        label: "Pulling {{ item }}"
+      tags:
+        - models-pull
+
+    # ── Create Modelfiles ────────────────────────────────────────────
+    - name: "Models | Create modelfiles directory"
+      ansible.builtin.file:
+        path: "{{ modelfiles_dir }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      tags:
+        - models-modelfile
+
+    - name: "Models | Template coder-128k Modelfile"
+      ansible.builtin.copy:
+        content: |
+          FROM {{ model_selection.slot3_coding }}
+          PARAMETER num_ctx 131072
+          SYSTEM You are an expert coding assistant. You write clean, efficient, well-documented code. Always include type hints and follow best practices.
+        dest: "{{ modelfiles_dir }}/Modelfile.coder-128k"
+        mode: "0644"
+      tags:
+        - models-modelfile
+
+    - name: "Models | Template coder-32k Modelfile"
+      ansible.builtin.copy:
+        content: |
+          FROM {{ model_selection.slot4_coding }}
+          PARAMETER num_ctx 32768
+          SYSTEM You are an expert coding assistant. You write clean, efficient, well-documented code. Always include type hints and follow best practices.
+        dest: "{{ modelfiles_dir }}/Modelfile.coder-32k"
+        mode: "0644"
+      when:
+        - model_selection.slot4_coding | length > 0
+        - model_selection.slot4_coding != 'none'
+      tags:
+        - models-modelfile
+
+    - name: "Models | Template llama-family Modelfile"
+      ansible.builtin.copy:
+        content: |
+          FROM llama3.2:3b
+          PARAMETER num_ctx 8192
+          SYSTEM You are a helpful, friendly family assistant. Provide safe, age-appropriate responses suitable for all family members.
+        dest: "{{ modelfiles_dir }}/Modelfile.llama-family"
+        mode: "0644"
+      tags:
+        - models-modelfile
+
+    - name: "Models | Template gemma-family Modelfile"
+      ansible.builtin.copy:
+        content: |
+          FROM gemma3:12b-it-q4_K_M
+          PARAMETER num_ctx 32768
+          SYSTEM You are a helpful, friendly family assistant. Provide safe, age-appropriate responses suitable for all family members.
+        dest: "{{ modelfiles_dir }}/Modelfile.gemma-family"
+        mode: "0644"
+      tags:
+        - models-modelfile
+
+    # ── Register models ──────────────────────────────────────────────
+    - name: "Models | Register custom models with Ollama"
+      ansible.builtin.command: "ollama create {{ item.name }} -f {{ modelfiles_dir }}/{{ item.file }}"
+      loop:
+        - { name: "coder-128k", file: "Modelfile.coder-128k" }
+        - { name: "coder-32k",  file: "Modelfile.coder-32k",  slot: "{{ model_selection.slot4_coding }}" }
+        - { name: "llama-family", file: "Modelfile.llama-family" }
+        - { name: "gemma-family", file: "Modelfile.gemma-family" }
+      when: item.slot is not defined or (item.slot | length > 0 and item.slot != 'none')
+      changed_when: true
+      loop_control:
+        label: "Creating {{ item.name }}"
+      tags:
+        - models-register
+
+    # ── Warmup service ───────────────────────────────────────────────
+    - name: "Models | Template warmup script"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama/warmup.sh.j2"
+        dest: /usr/local/bin/ollama-warmup.sh
+        mode: "0755"
+        owner: root
+        group: root
+      tags:
+        - models-warmup
+
+    - name: "Models | Template warmup systemd service"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama/ollama-warmup.service.j2"
+        dest: /etc/systemd/system/ollama-warmup.service
+        mode: "0644"
+        owner: root
+        group: root
+      tags:
+        - models-warmup
+
+    - name: "Models | Reload systemd daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+      tags:
+        - models-warmup
+
+    - name: "Models | Enable and start warmup service"
+      ansible.builtin.systemd:
+        name: ollama-warmup
+        enabled: true
+        state: started
+      tags:
+        - models-warmup

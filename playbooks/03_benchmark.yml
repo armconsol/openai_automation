@@ -1,0 +1,314 @@
+---
+# playbooks/03_benchmark.yml
+# Benchmark installed Ollama models and select optimal models for each slot
+
+- name: "Benchmark | Evaluate Ollama models"
+  hosts: ai_server
+  become: false
+  gather_facts: true
+  tags:
+    - benchmark
+  vars:
+    benchmark_models: ""
+    pull_if_better: false
+    min_composite_score: 0.50
+    ollama_api_url: "http://localhost:11434"
+    benchmark_results_dir: "{{ playbook_dir }}/../benchmarks/results"
+    test_prompts:
+      code_gen:
+        prompt: "Write a Python merge sort with type hints, docstring, and 3 unit tests"
+        category: coding
+        weight: 1.0
+      debug:
+        prompt: >-
+          Here is a Python function with 3 bugs. Find and fix all bugs:
+
+          def calculate_average(numbers):
+              total = 0
+              for n in numbers:
+                  total =+ n
+              average = total / len(numbers
+              return averege
+        category: coding
+        weight: 1.0
+      refactor:
+        prompt: >-
+          Refactor this for readability and performance:
+
+          def f(l):
+              r=[]
+              for i in range(len(l)):
+                  if l[i]%2==0:
+                      r.append(l[i]*2)
+              return r
+        category: coding
+        weight: 1.0
+      explain:
+        prompt: "Explain how Python's GIL works and when it matters"
+        category: general
+        weight: 1.0
+      creative:
+        prompt: "Suggest 5 fun family activities for a rainy weekend"
+        category: general
+        weight: 1.0
+      reasoning:
+        prompt: "I have 3 apples. I give away half. Then I get 4 more. How many do I have?"
+        category: general
+        weight: 1.0
+      latency:
+        prompt: "Hi"
+        category: latency
+        weight: 0.5
+
+  tasks:
+    - name: "Benchmark | Ensure results directory exists on control node"
+      ansible.builtin.file:
+        path: "{{ benchmark_results_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      tags:
+        - benchmark-setup
+
+    - name: "Benchmark | Wait for Ollama API to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:11434/api/tags"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: ollama_ready
+      retries: 24
+      delay: 5
+      until: ollama_ready.status == 200
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Discover installed models"
+      ansible.builtin.command: ollama list
+      changed_when: false
+      register: ollama_list_output
+      retries: 6
+      delay: 10
+      until: ollama_list_output.rc == 0
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Parse model names from ollama list"
+      ansible.builtin.set_fact:
+        installed_models: "{{ ollama_list_output.stdout_lines[1:] | map('split') | map('first') | list }}"
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Set models_to_benchmark to all installed models"
+      ansible.builtin.set_fact:
+        models_to_benchmark: "{{ installed_models }}"
+      when: benchmark_models | default('') | length == 0
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Set models_to_benchmark to specified subset"
+      ansible.builtin.set_fact:
+        models_to_benchmark: "{{ benchmark_models.split(',') | map('trim') | list }}"
+      when: benchmark_models | default('') | length > 0
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Display models to benchmark"
+      ansible.builtin.debug:
+        msg: "Will benchmark the following models: {{ models_to_benchmark }}"
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Run test prompts against each model"
+      ansible.builtin.uri:
+        url: "{{ ollama_api_url }}/api/generate"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ item.0 }}"
+          prompt: "{{ test_prompts[item.1].prompt }}"
+          stream: false
+        timeout: 300
+        status_code: 200
+      loop: "{{ models_to_benchmark | product(test_prompts.keys() | list) | list }}"
+      loop_control:
+        label: "{{ item.0 }} / {{ item.1 }}"
+      register: benchmark_raw_results
+      failed_when: false
+      tags:
+        - benchmark-run
+
+    - name: "Benchmark | Compute per-model metrics"
+      ansible.builtin.set_fact:
+        model_metrics: |
+          {% set ns = namespace(results={}) %}
+          {% for model in models_to_benchmark %}
+          {%   set ns2 = namespace(coding_quality=0, coding_count=0, general_quality=0, general_count=0, total_toks=0, total_eval_time=0, ttft_sum=0, ttft_count=0, latency_ns=0) %}
+          {%   for result in benchmark_raw_results.results %}
+          {%     if result.item[0] == model and result.status == 200 %}
+          {%       set test_name = result.item[1] %}
+          {%       set resp = result.json | default({}) %}
+          {%       set eval_count = resp.eval_count | default(0) | int %}
+          {%       set eval_duration = resp.eval_duration | default(1) | int %}
+          {%       set prompt_eval_duration = resp.prompt_eval_duration | default(0) | int %}
+          {%       set response_text = resp.response | default('') %}
+          {%       set tok_per_sec = (eval_count / (eval_duration / 1000000000.0)) if eval_duration > 0 else 0 %}
+          {%       set ns2.total_toks = ns2.total_toks + tok_per_sec %}
+          {%       set ns2.ttft_sum = ns2.ttft_sum + prompt_eval_duration %}
+          {%       set ns2.ttft_count = ns2.ttft_count + 1 %}
+          {%       if test_name == 'latency' %}
+          {%         set ns2.latency_ns = eval_duration + prompt_eval_duration %}
+          {%       endif %}
+          {%       set resp_len = response_text | length %}
+          {%       if test_name in ['code_gen', 'debug', 'refactor'] %}
+          {%         set has_def = 1 if 'def ' in response_text else 0 %}
+          {%         set has_return = 1 if 'return' in response_text else 0 %}
+          {%         set length_score = [resp_len / 1500.0, 1.0] | min %}
+          {%         set quality = (has_def * 0.3 + has_return * 0.3 + length_score * 0.4) %}
+          {%         set ns2.coding_quality = ns2.coding_quality + quality %}
+          {%         set ns2.coding_count = ns2.coding_count + 1 %}
+          {%       elif test_name in ['explain', 'creative', 'reasoning'] %}
+          {%         set length_score = [resp_len / 800.0, 1.0] | min %}
+          {%         set has_structure = 1 if ('\n' in response_text and resp_len > 100) else 0 %}
+          {%         set quality = (length_score * 0.6 + has_structure * 0.4) %}
+          {%         set ns2.general_quality = ns2.general_quality + quality %}
+          {%         set ns2.general_count = ns2.general_count + 1 %}
+          {%       endif %}
+          {%     endif %}
+          {%   endfor %}
+          {%   set coding_avg = (ns2.coding_quality / ns2.coding_count) if ns2.coding_count > 0 else 0 %}
+          {%   set general_avg = (ns2.general_quality / ns2.general_count) if ns2.general_count > 0 else 0 %}
+          {%   set test_count = (ns2.ttft_count) if ns2.ttft_count > 0 else 1 %}
+          {%   set avg_toks = ns2.total_toks / test_count %}
+          {%   set toks_norm = [avg_toks / 100.0, 1.0] | min %}
+          {%   set latency_ms = ns2.latency_ns / 1000000.0 if ns2.latency_ns > 0 else 9999 %}
+          {%   set latency_score = [1.0 - (latency_ms / 5000.0), 0] | max %}
+          {%   set coding_composite = coding_avg * 0.45 + toks_norm * 0.30 + latency_score * 0.25 %}
+          {%   set general_composite = general_avg * 0.45 + toks_norm * 0.30 + latency_score * 0.25 %}
+          {%   set category = 'coding' if (coding_composite - general_composite) >= 0.15 else 'general' %}
+          {%   set _ = ns.results.update({model: {'coding_quality': coding_avg | round(3), 'general_quality': general_avg | round(3), 'avg_tok_per_sec': avg_toks | round(1), 'toks_norm': toks_norm | round(3), 'latency_ms': latency_ms | round(1), 'latency_score': latency_score | round(3), 'coding_composite': coding_composite | round(3), 'general_composite': general_composite | round(3), 'category': category}}) %}
+          {% endfor %}
+          {{ ns.results | to_json }}
+      tags:
+        - benchmark-compute
+
+    - name: "Benchmark | Parse model metrics"
+      ansible.builtin.set_fact:
+        parsed_metrics: "{{ model_metrics | from_json }}"
+      tags:
+        - benchmark-compute
+
+    - name: "Benchmark | Rank models and select slots"
+      ansible.builtin.set_fact:
+        model_selection: |
+          {% set general_models = [] %}
+          {% set coding_models = [] %}
+          {% for model, metrics in parsed_metrics.items() %}
+          {%   if metrics.category == 'general' %}
+          {%     set _ = general_models.append({'name': model, 'composite': metrics.general_composite, 'metrics': metrics}) %}
+          {%   else %}
+          {%     set _ = coding_models.append({'name': model, 'composite': metrics.coding_composite, 'metrics': metrics}) %}
+          {%   endif %}
+          {% endfor %}
+          {% set general_sorted = general_models | sort(attribute='composite', reverse=true) %}
+          {% set coding_sorted = coding_models | sort(attribute='composite', reverse=true) %}
+          {% set slot1 = general_sorted[0].name if general_sorted | length > 0 else 'none' %}
+          {% set slot2 = general_sorted[1].name if general_sorted | length > 1 else (general_sorted[0].name if general_sorted | length > 0 else 'none') %}
+          {% set slot3 = coding_sorted[0].name if coding_sorted | length > 0 else (general_sorted[0].name if general_sorted | length > 0 else 'none') %}
+          {% set slot4 = coding_sorted[1].name if coding_sorted | length > 1 else (coding_sorted[0].name if coding_sorted | length > 0 else 'none') %}
+          {{ {'slot1_general': slot1, 'slot2_general': slot2, 'slot3_coding': slot3, 'slot4_coding': slot4, 'all_metrics': parsed_metrics, 'general_ranking': general_sorted, 'coding_ranking': coding_sorted} | to_json }}
+      tags:
+        - benchmark-select
+
+    - name: "Benchmark | Parse model selection"
+      ansible.builtin.set_fact:
+        selection: "{{ model_selection | from_json }}"
+      tags:
+        - benchmark-select
+
+    - name: "Benchmark | Display model selection results"
+      ansible.builtin.debug:
+        msg:
+          - "============================================="
+          - "  MODEL SELECTION RESULTS"
+          - "============================================="
+          - "  Slot 1 (General Primary):  {{ selection.slot1_general }}"
+          - "  Slot 2 (General Secondary): {{ selection.slot2_general }}"
+          - "  Slot 3 (Coding Primary):   {{ selection.slot3_coding }}"
+          - "  Slot 4 (Coding Secondary): {{ selection.slot4_coding }}"
+          - "============================================="
+      tags:
+        - benchmark-select
+
+    - name: "Benchmark | Generate timestamp"
+      ansible.builtin.set_fact:
+        benchmark_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+      tags:
+        - benchmark-report
+
+    - name: "Benchmark | Save benchmark results markdown"
+      ansible.builtin.copy:
+        content: |
+          # Benchmark Results - {{ benchmark_timestamp }}
+
+          ## Model Selection
+          | Slot | Role | Model | Composite Score |
+          |------|------|-------|----------------|
+          | 1 | General (Primary) | {{ selection.slot1_general }} | {{ parsed_metrics[selection.slot1_general].general_composite | default('N/A') }} |
+          | 2 | General (Secondary) | {{ selection.slot2_general }} | {{ parsed_metrics[selection.slot2_general].general_composite | default('N/A') }} |
+          | 3 | Coding (Primary) | {{ selection.slot3_coding }} | {{ parsed_metrics[selection.slot3_coding].coding_composite | default('N/A') }} |
+          | 4 | Coding (Secondary) | {{ selection.slot4_coding }} | {{ parsed_metrics[selection.slot4_coding].coding_composite | default('N/A') }} |
+
+          ## Detailed Metrics
+          {% for model, metrics in parsed_metrics.items() %}
+          ### {{ model }}
+          - **Category**: {{ metrics.category }}
+          - **Coding Quality**: {{ metrics.coding_quality }}
+          - **General Quality**: {{ metrics.general_quality }}
+          - **Avg Tokens/sec**: {{ metrics.avg_tok_per_sec }}
+          - **Latency (ms)**: {{ metrics.latency_ms }}
+          - **Coding Composite**: {{ metrics.coding_composite }}
+          - **General Composite**: {{ metrics.general_composite }}
+          {% endfor %}
+
+          ## Scoring Formula
+          - Composite = quality * 0.45 + token_speed_normalized * 0.30 + latency_score * 0.25
+          - Category: coding if (coding_composite - general_composite) >= 0.15, else general
+        dest: "{{ benchmark_results_dir }}/benchmark_{{ benchmark_timestamp }}.md"
+        mode: "0644"
+      delegate_to: localhost
+      tags:
+        - benchmark-report
+
+    - name: "Benchmark | Save model_selection.json"
+      ansible.builtin.copy:
+        content: "{{ selection | to_nice_json }}"
+        dest: "{{ benchmark_results_dir }}/model_selection.json"
+        mode: "0644"
+      delegate_to: localhost
+      tags:
+        - benchmark-report
+
+    - name: "Benchmark | Check minimum composite scores"
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: Best composite score for {{ item.key }} models is below threshold
+          ({{ min_composite_score }}). Consider pulling additional models.
+          Recommended candidates: qwen2.5-coder:14b, deepseek-coder-v2:16b, codellama:34b
+      when: >-
+        (item.value.coding_composite < min_composite_score) and
+        (item.value.general_composite < min_composite_score)
+      loop: "{{ parsed_metrics | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      tags:
+        - benchmark-report
+
+    - name: "Benchmark | Pull recommended model if pull_if_better is true"
+      ansible.builtin.command: "ollama pull qwen2.5-coder:14b"
+      when:
+        - pull_if_better | bool
+        - parsed_metrics.values() | map(attribute='coding_composite') | max < min_composite_score
+      changed_when: true
+      tags:
+        - benchmark-pull

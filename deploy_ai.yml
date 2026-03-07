@@ -1,0 +1,98 @@
+---
+# =============================================================================
+# AI Platform — Full Deployment
+# =============================================================================
+# Runs every role in dependency order, from pre-flight through DNS.
+#
+# Usage:
+#   ansible-playbook deploy_ai.yml -K                             # full deploy (-K prompts for sudo password)
+#   ansible-playbook deploy_ai.yml -K --tags vault                # Vault only
+#   ansible-playbook deploy_ai.yml -K --skip-tags benchmark       # skip benchmarking
+#   ansible-playbook deploy_ai.yml -K -e "slot4_model=deepseek-r1:14b"
+# =============================================================================
+
+# ── 1. Pre-flight — verify all hosts are reachable and healthy ────────────────
+- name: "Pre-flight checks"
+  ansible.builtin.import_playbook: playbooks/00_preflight.yml
+
+# ── 2. Vault — deploy HashiCorp Vault, init, unseal, populate secrets ─────────
+- name: "HashiCorp Vault"
+  ansible.builtin.import_playbook: playbooks/01_vault.yml
+
+# ── 3. Infrastructure — Docker CE + Ollama on ai_server ──────────────────────
+- name: "Infrastructure (Docker + Ollama)"
+  ansible.builtin.import_playbook: playbooks/02_infrastructure.yml
+
+# ── 4. Benchmark — score all installed models, select 4 warm-up slots ─────────
+- name: "Model benchmarking"
+  ansible.builtin.import_playbook: playbooks/03_benchmark.yml
+
+# ── 5. Models — pull slot models, create Modelfiles, start warm-up service ────
+- name: "Model slots and warm-up"
+  ansible.builtin.import_playbook: playbooks/04_models.yml
+
+# ── 6. Keycloak — deploy Keycloak, create realm and client ────────────────────
+- name: "Keycloak SSO"
+  ansible.builtin.import_playbook: playbooks/05_keycloak.yml
+
+# ── 7. Qdrant — deploy vector database for RAG ───────────────────────────────
+- name: "Qdrant vector database"
+  ansible.builtin.import_playbook: playbooks/06_qdrant.yml
+
+# ── 8. Open WebUI — deploy with Ollama + Qdrant + Keycloak OIDC ──────────────
+- name: "Open WebUI"
+  ansible.builtin.import_playbook: playbooks/07_openwebui.yml
+
+# ── 9. OpenClaw — deploy Telegram bot (skipped if no token provided) ──────────
+- name: "OpenClaw Telegram bot"
+  ansible.builtin.import_playbook: playbooks/08_openclaw.yml
+
+# ── 10. NGINX — deploy reverse-proxy configs ─────────────────────────────────
+- name: "NGINX reverse proxy"
+  ansible.builtin.import_playbook: playbooks/09_nginx.yml
+
+# ── 11. CoreDNS — add vault + ollama-api DNS records ─────────────────────────
+- name: "CoreDNS records"
+  ansible.builtin.import_playbook: playbooks/10_coredns.yml
+
+# ── 12. Vault OIDC — configure Keycloak as Vault login provider ───────────────
+- name: "Vault OIDC"
+  ansible.builtin.import_playbook: playbooks/11_vault_oidc.yml
+
+# ── 13. Summary — print all service URLs and credentials ─────────────────────
+- name: "Deployment summary"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - summary
+  vars:
+    _token_file: "{{ playbook_dir }}/vault/.vault-token"
+    _vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+  tasks:
+    - name: "Summary | Load credentials from Vault"
+      ansible.builtin.set_fact:
+        _kc_admin_pass:       "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:admin_password token=' ~ lookup('ansible.builtin.file', _token_file) ~ ' url=' ~ _vault_url) }}"
+        _kc_realm_admin_pass: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:realm_admin_password token=' ~ lookup('ansible.builtin.file', _token_file) ~ ' url=' ~ _vault_url) }}"
+        _ollama_api_key:      "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', _token_file) ~ ' url=' ~ _vault_url) }}"
+
+    - name: "Summary | Display deployment results"
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════╗
+          ║       {{ platform_name }} — Deployment Complete
+          ╠══════════════════════════════════════════════════════╣
+          ║  Open WebUI:     {{ openwebui_url }}
+          ║  Keycloak Admin: {{ keycloak_url }}
+          ║  Vault UI:       {{ vault_api_addr }}
+          ║  Ollama API:     {{ ollama_api_url }}
+          ╠══════════════════════════════════════════════════════╣
+          ║  Keycloak admin user:  admin                         ║
+          ║  Keycloak admin pass:  {{ _kc_admin_pass }}
+          ║  Realm admin user:     {{ keycloak_realm_admin_user }}
+          ║  Realm admin pass:     {{ _kc_realm_admin_pass }}
+          ║  Ollama API Key:       {{ _ollama_api_key }}
+          ╠══════════════════════════════════════════════════════╣
+          ║  Vault init file:  vault/.vault-init.json            ║
+          ║  KEEP THIS FILE SAFE — NOT IN GIT                    ║
+          ╚══════════════════════════════════════════════════════╝

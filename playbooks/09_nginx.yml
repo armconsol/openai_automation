@@ -1,0 +1,53 @@
+---
+# playbooks/09_nginx.yml
+# Configure Nginx reverse proxy on nginx_proxy host
+
+- name: "Nginx | Configure reverse proxy"
+  hosts: nginx_proxy
+  become: true
+  gather_facts: false
+  tags:
+    - nginx
+  tasks:
+    - name: "Nginx | Template Vault proxy configuration"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/nginx/vault.conf.j2"
+        dest: /etc/nginx/conf.d/vault.conf
+        mode: "0644"
+        owner: root
+        group: root
+      tags:
+        - nginx-vault
+
+    - name: "Nginx | Template Ollama API proxy configuration"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/nginx/ollama-api.conf.j2"
+        dest: /etc/nginx/conf.d/ollama-api.conf
+        mode: "0644"
+        owner: root
+        group: root
+      tags:
+        - nginx-ollama
+
+    - name: "Nginx | Template Keycloak proxy configuration"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/nginx/keycloak-proxy.conf.j2"
+        dest: /etc/nginx/conf.d/keycloak-proxy.conf
+        mode: "0644"
+        owner: root
+        group: root
+      tags:
+        - nginx-keycloak
+
+    - name: "Nginx | Validate configuration"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+      tags:
+        - nginx-validate
+
+    - name: "Nginx | Reload nginx"
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+      tags:
+        - nginx-validate

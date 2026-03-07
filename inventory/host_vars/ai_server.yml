@@ -1,0 +1,26 @@
+---
+# ============================================================
+# Host Variables — ai_server
+# Dell M630 blade — AI inference platform
+# ============================================================
+
+# Services running on this host
+services:
+  ollama:
+    port: 11434
+    data_dir: "{{ ollama_models_path }}"
+  keycloak:
+    port: 8180
+    data_dir: "{{ keycloak_data_path }}"
+  qdrant:
+    http_port: 6333
+    grpc_port: 6334
+    data_dir: "{{ qdrant_data_path }}"
+  openwebui:
+    port: 8080
+    data_dir: "{{ openwebui_data_path }}"
+  openclaw:
+    data_dir: "{{ openclaw_data_path }}"
+
+# Disk checks
+required_ai_data_free_gb: 500

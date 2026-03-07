@@ -1,0 +1,26 @@
+#!/bin/bash
+# Ollama model warm-up script
+# Sends a 1-token generation to each slot model to pin them in RAM
+
+set -e
+
+OLLAMA_URL="http://localhost:11434"
+API_KEY="{{ ollama_api_key }}"
+
+warmup_model() {
+    local model="$1"
+    echo "[warmup] Loading model: $model"
+    curl -sf -X POST "${OLLAMA_URL}/api/generate" \
+        -H "Authorization: Bearer ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"${model}\",\"prompt\":\"Hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+        > /dev/null || echo "[warmup] Warning: failed to warm up ${model}"
+    echo "[warmup] Done: $model"
+}
+
+warmup_model "{{ slot1_model }}"
+warmup_model "{{ slot2_model }}"
+warmup_model "{{ slot3_model }}"
+warmup_model "{{ slot4_model }}"
+
+echo "[warmup] All models warmed up."

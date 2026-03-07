@@ -1,0 +1,117 @@
+---
+# playbooks/07_openwebui.yml
+# Deploy Open WebUI on ai_server
+
+- name: "Open WebUI | Deploy Open WebUI"
+  hosts: ai_server
+  become: true
+  gather_facts: false
+  tags:
+    - openwebui
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+    openwebui_container_name: open-webui
+    openwebui_data_dir: /mnt/ai_data/open-webui
+
+  tasks:
+    # ── Retrieve secrets from Vault ──────────────────────────────────
+    - name: "Open WebUI | Retrieve Ollama API key from Vault"
+      ansible.builtin.set_fact:
+        ollama_api_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - openwebui-secrets
+
+    - name: "Open WebUI | Retrieve Keycloak client secret from Vault"
+      ansible.builtin.set_fact:
+        keycloak_client_secret: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:client_secret token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - openwebui-secrets
+
+    - name: "Open WebUI | Retrieve Open WebUI secret key from Vault"
+      ansible.builtin.set_fact:
+        openwebui_secret_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/openwebui:secret_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - openwebui-secrets
+
+    - name: "Open WebUI | Retrieve OIDC URL from Vault"
+      ansible.builtin.set_fact:
+        keycloak_oidc_url: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:oidc_url token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - openwebui-secrets
+
+    # ── Container deployment ─────────────────────────────────────────
+    - name: "Open WebUI | Stop and remove existing container"
+      community.docker.docker_container:
+        name: "{{ openwebui_container_name }}"
+        state: absent
+      tags:
+        - openwebui-deploy
+
+    - name: "Open WebUI | Create data directory"
+      ansible.builtin.file:
+        path: "{{ openwebui_data_dir }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      tags:
+        - openwebui-deploy
+
+    - name: "Open WebUI | Run Open WebUI container"
+      community.docker.docker_container:
+        name: "{{ openwebui_container_name }}"
+        image: ghcr.io/open-webui/open-webui:main
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "8080:8080"
+        etc_hosts:
+          host.docker.internal: host-gateway
+        volumes:
+          - "{{ openwebui_data_dir }}:/app/backend/data"
+        env:
+          OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+          OLLAMA_API_KEY: "{{ ollama_api_key }}"
+          WEBUI_SECRET_KEY: "{{ openwebui_secret_key }}"
+          WEBUI_AUTH: "true"
+          ENABLE_OAUTH_SIGNUP: "true"
+          OAUTH_PROVIDER_NAME: "{{ platform_name }}"
+          OAUTH_CLIENT_ID: "open-webui"
+          OAUTH_CLIENT_SECRET: "{{ keycloak_client_secret }}"
+          OPENID_PROVIDER_URL: "{{ keycloak_oidc_url }}/.well-known/openid-configuration"
+          OAUTH_SCOPES: "openid email profile"
+          ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
+          OAUTH_ROLES_CLAIM: "realm_access.roles"
+          OAUTH_ALLOWED_ROLES: "ai-user,ai-admin"
+          OAUTH_ADMIN_ROLES: "ai-admin"
+          ENABLE_RAG_WEB_SEARCH: "false"
+          RAG_EMBEDDING_ENGINE: "ollama"
+          RAG_EMBEDDING_MODEL: "nomic-embed-text"
+          RAG_OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+          VECTOR_DB: "qdrant"
+          QDRANT_URI: "http://host.docker.internal:6333"
+          ENABLE_ADMIN_EXPORT: "true"
+          DEFAULT_MODELS: "llama-family"
+          WEBUI_NAME: "{{ platform_name }}"
+      tags:
+        - openwebui-deploy
+
+    - name: "Open WebUI | Wait for Open WebUI to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:8080"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: openwebui_health
+      retries: 30
+      delay: 10
+      until: openwebui_health.status == 200
+      tags:
+        - openwebui-deploy
+
+    - name: "Open WebUI | Display status"
+      ansible.builtin.debug:
+        msg: "Open WebUI is running at http://localhost:8080 (proxied via {{ openwebui_url }})"
+      tags:
+        - openwebui-deploy

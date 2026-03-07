@@ -1,0 +1,4 @@
+# Vault secrets — NEVER commit these files
+.vault-token
+.vault-init.json
+keycloak-credentials.txt

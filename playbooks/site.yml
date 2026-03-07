@@ -1,0 +1,122 @@
+---
+# playbooks/site.yml
+# Master playbook - imports all playbooks in sequence
+
+- name: "Site | Import pre-flight checks"
+  ansible.builtin.import_playbook: 00_preflight.yml
+  tags:
+    - preflight
+
+- name: "Site | Import Vault deployment"
+  ansible.builtin.import_playbook: 01_vault.yml
+  tags:
+    - vault
+
+- name: "Site | Import infrastructure setup"
+  ansible.builtin.import_playbook: 02_infrastructure.yml
+  tags:
+    - infrastructure
+
+- name: "Site | Import model benchmarking"
+  ansible.builtin.import_playbook: 03_benchmark.yml
+  tags:
+    - benchmark
+
+- name: "Site | Import model configuration"
+  ansible.builtin.import_playbook: 04_models.yml
+  tags:
+    - models
+
+- name: "Site | Import Keycloak deployment"
+  ansible.builtin.import_playbook: 05_keycloak.yml
+  tags:
+    - keycloak
+
+- name: "Site | Import Qdrant deployment"
+  ansible.builtin.import_playbook: 06_qdrant.yml
+  tags:
+    - qdrant
+
+- name: "Site | Import Open WebUI deployment"
+  ansible.builtin.import_playbook: 07_openwebui.yml
+  tags:
+    - openwebui
+
+- name: "Site | Import OpenClaw deployment"
+  ansible.builtin.import_playbook: 08_openclaw.yml
+  tags:
+    - openclaw
+
+- name: "Site | Import Nginx configuration"
+  ansible.builtin.import_playbook: 09_nginx.yml
+  tags:
+    - nginx
+
+- name: "Site | Import CoreDNS configuration"
+  ansible.builtin.import_playbook: 10_coredns.yml
+  tags:
+    - coredns
+
+- name: "Site | Import Vault OIDC configuration"
+  ansible.builtin.import_playbook: 11_vault_oidc.yml
+  tags:
+    - vault-oidc
+
+# ── Final credentials summary ───────────────────────────────────────
+- name: "Site | Display deployment summary"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - summary
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+  tasks:
+    - name: "Summary | Retrieve Keycloak admin password"
+      ansible.builtin.set_fact:
+        kc_admin_pass: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:admin_password token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+
+    - name: "Summary | Retrieve Keycloak realm admin password"
+      ansible.builtin.set_fact:
+        kc_realm_admin_pass: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:realm_admin_password token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+
+    - name: "Summary | Retrieve Vault root token"
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../vault/.vault-init.json') | from_json | json_query('root_token') }}"
+
+    - name: "Summary | Display credentials and access information"
+      ansible.builtin.debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════════╗
+          ║             {{ platform_name }} PLATFORM - DEPLOYMENT COMPLETE
+          ╠══════════════════════════════════════════════════════════════════╣
+          ║                                                                ║
+          ║  SERVICES:                                                     ║
+          ║  ─────────                                                     ║
+          ║  Open WebUI:   {{ openwebui_url }}
+          ║  Keycloak:     {{ keycloak_url }}
+          ║  Vault:        {{ vault_api_addr }}
+          ║  Ollama API:   {{ ollama_api_url }}
+          ║  Qdrant:       http://{{ ai_server_ip }}:{{ qdrant_http_port }} (internal only)
+          ║                                                                ║
+          ║  CREDENTIALS:                                                  ║
+          ║  ────────────                                                  ║
+          ║  Vault Root Token:        {{ vault_root_token }}
+          ║  Vault Token File:        vault/.vault-token                   ║
+          ║  Keycloak Admin:          admin / {{ kc_admin_pass }}
+          ║  Realm Admin:             {{ keycloak_realm_admin_user }} / {{ kc_realm_admin_pass }}
+          ║                                                                ║
+          ║  FILES:                                                        ║
+          ║  ──────                                                        ║
+          ║  Vault Init:     vault/.vault-init.json                        ║
+          ║  Ansible Token:  vault/.vault-token                            ║
+          ║  Benchmarks:     benchmarks/results/model_selection.json       ║
+          ║                                                                ║
+          ║  NOTES:                                                        ║
+          ║  ──────                                                        ║
+          ║  - All secrets are stored in Vault at {{ vault_secret_prefix }}/*
+          ║  - Run individual playbooks with --tags for partial deploys    ║
+          ║  - Vault must be unsealed after each restart                   ║
+          ║                                                                ║
+          ╚══════════════════════════════════════════════════════════════════╝

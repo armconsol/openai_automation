@@ -1,0 +1,125 @@
+---
+# playbooks/00_preflight.yml
+# Pre-flight checks: control-node dependencies, SSH/sudo connectivity, disk space, Ollama API health
+
+- name: "Pre-flight | Control node dependencies"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags:
+    - preflight
+    - local-deps
+  tasks:
+    - name: "Preflight | Ensure hvac Python library is installed (required for Vault lookups)"
+      ansible.builtin.pip:
+        name: hvac
+        state: present
+      become: false
+
+- name: "Pre-flight | Verify SSH and sudo access on all hosts"
+  hosts: all
+  gather_facts: true
+  become: true
+  tags:
+    - preflight
+    - connectivity
+  tasks:
+    - name: "Preflight | Confirm sudo privileges"
+      ansible.builtin.command: whoami
+      changed_when: false
+      register: whoami_result
+
+    - name: "Preflight | Assert running as root via sudo"
+      ansible.builtin.assert:
+        that:
+          - whoami_result.stdout == "root"
+        fail_msg: "sudo escalation failed on {{ inventory_hostname }}"
+        success_msg: "sudo access confirmed on {{ inventory_hostname }}"
+
+- name: "Pre-flight | Disk space checks on ai_server"
+  hosts: ai_server
+  gather_facts: false
+  become: true
+  tags:
+    - preflight
+    - disk
+  tasks:
+    - name: "Preflight | Get /mnt/ai_data mount info"
+      ansible.builtin.command: df --output=avail -BG /mnt/ai_data
+      changed_when: false
+      register: ai_data_disk
+
+    - name: "Preflight | Parse available disk space on /mnt/ai_data"
+      ansible.builtin.set_fact:
+        ai_data_avail_gb: "{{ ai_data_disk.stdout_lines[-1] | regex_replace('[^0-9]', '') | int }}"
+
+    - name: "Preflight | Assert /mnt/ai_data has >= 500 GB free"
+      ansible.builtin.assert:
+        that:
+          - ai_data_avail_gb | int >= 500
+        fail_msg: >-
+          CRITICAL: /mnt/ai_data on ai_server has only {{ ai_data_avail_gb }} GB free.
+          At least 500 GB is required for AI models and application data.
+        success_msg: "/mnt/ai_data has {{ ai_data_avail_gb }} GB free (>= 500 GB required)"
+
+- name: "Pre-flight | Disk space checks on coredns_host"
+  hosts: coredns_host
+  gather_facts: false
+  become: true
+  tags:
+    - preflight
+    - disk
+  tasks:
+    - name: "Preflight | Get / mount info on coredns_host"
+      ansible.builtin.command: df --output=avail -BG /
+      changed_when: false
+      register: root_disk
+
+    - name: "Preflight | Parse available disk space on /"
+      ansible.builtin.set_fact:
+        root_avail_gb: "{{ root_disk.stdout_lines[-1] | regex_replace('[^0-9]', '') | int }}"
+
+    - name: "Preflight | Assert / has >= 10 GB free on coredns_host"
+      ansible.builtin.assert:
+        that:
+          - root_avail_gb | int >= 10
+        fail_msg: >-
+          CRITICAL: / on coredns_host has only {{ root_avail_gb }} GB free.
+          At least 10 GB is required.
+        success_msg: "/ has {{ root_avail_gb }} GB free (>= 10 GB required)"
+
+- name: "Pre-flight | Ollama API health check on ai_server"
+  hosts: ai_server
+  gather_facts: false
+  become: false
+  tags:
+    - preflight
+    - ollama
+  tasks:
+    - name: "Preflight | Check Ollama API is responding"
+      ansible.builtin.uri:
+        url: "http://localhost:11434/api/tags"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: ollama_health
+      failed_when: false
+      retries: 12
+      delay: 5
+      until: ollama_health.status is defined and ollama_health.status == 200
+
+    - name: "Preflight | Assert Ollama API is healthy"
+      ansible.builtin.assert:
+        that:
+          - ollama_health.status == 200
+        fail_msg: >-
+          CRITICAL: Ollama API is not responding on ai_server at http://localhost:11434/api/tags.
+          HTTP status: {{ ollama_health.status | default('unreachable') }}.
+          Ensure Ollama is installed and running before proceeding.
+        success_msg: "Ollama API is healthy and responding on ai_server"
+
+    - name: "Preflight | Display available Ollama models"
+      ansible.builtin.debug:
+        msg: "Ollama models available: {{ (ollama_health.json.models | default([])) | map(attribute='name') | list }}"
+      when: ollama_health.status == 200

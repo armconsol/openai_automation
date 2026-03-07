@@ -1,0 +1,27 @@
+# ── Vault secrets — NEVER commit anything from vault/ except .gitignore ──────
+vault/*
+!vault/.gitignore
+
+# ── Local environment overrides — never commit ───────────────────────────────
+local.yml
+inventory/local.yml
+
+# ── Ansible generated files ───────────────────────────────────────────────────
+*.retry
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ── Editor ────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

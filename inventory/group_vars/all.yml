@@ -1,0 +1,112 @@
+---
+# ============================================================
+# Global Variables — AI Platform Ansible Automation
+# ============================================================
+
+# Domain and networking
+domain: example.com
+ai_server_ip: 192.168.1.100
+nginx_proxy_ip: 192.168.1.30
+coredns_host_ip: 192.168.1.29
+
+# SSH user for all managed hosts (override per-host in host_vars if needed)
+ansible_user: admin
+
+# Platform identity — used for Keycloak realm, Vault paths, UI display names
+platform_name: "AI Platform"
+vault_project_slug: "ai-platform"
+
+# Service URLs
+vault_url: "https://vault.{{ domain }}"
+keycloak_url: "https://idm.{{ domain }}"
+openwebui_url: "https://ollama-ui.{{ domain }}"
+ollama_api_url: "https://ollama-api.{{ domain }}"
+
+# Storage paths on ai_server
+ai_data_root: /mnt/ai_data
+ollama_models_path: "{{ ai_data_root }}/ollama_models"
+keycloak_data_path: "{{ ai_data_root }}/keycloak"
+qdrant_data_path: "{{ ai_data_root }}/qdrant"
+openwebui_data_path: "{{ ai_data_root }}/open-webui"
+openclaw_data_path: "{{ ai_data_root }}/openclaw"
+benchmark_results_path: "{{ ai_data_root }}/benchmarks"
+
+# Storage paths on coredns_host
+vault_config_path: /docker_mounts/vault/config
+vault_data_path: /docker_mounts/vault/data
+vault_scripts_path: /docker_mounts/vault
+coredns_zone_file: "/docker_mounts/coredns/{{ domain }}.db"
+
+# Local control-node paths (gitignored)
+vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+vault_init_file: "{{ playbook_dir }}/../vault/.vault-init.json"
+
+# Vault configuration
+vault_port: 8202
+vault_api_addr: "https://vault.{{ domain }}"
+vault_secret_prefix: "secret/data/{{ vault_project_slug }}"
+vault_secret_meta_prefix: "secret/metadata/{{ vault_project_slug }}"
+vault_approle_name: "ai-services"
+
+# Service ports
+keycloak_port: 8180
+ollama_port: 11434
+qdrant_http_port: 6333
+qdrant_grpc_port: 6334
+
+# Ollama configuration
+ollama_host: "0.0.0.0:11434"
+ollama_num_threads: 28
+ollama_num_parallel: 4
+ollama_max_loaded_models: 4
+ollama_keep_alive: "-1"
+ollama_flash_attention: "1"
+
+# NUMA/CPU affinity - Dell M630, 2x E5-2690v4
+# NUMA node 1 (odd CPUs) has ~120 GB free RAM vs node 0's ~75 GB
+ollama_numa_node: "1"
+ollama_cpu_affinity: "1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51 53 55"
+
+# Keycloak configuration
+keycloak_realm: "{{ vault_project_slug }}"
+keycloak_realm_display: "{{ platform_name }}"
+keycloak_client_id: open-webui
+keycloak_redirect_uri: "https://ollama-ui.{{ domain }}/*"
+keycloak_oidc_url: "https://idm.{{ domain }}/realms/{{ keycloak_realm }}"
+keycloak_realm_admin_user: "{{ vault_project_slug }}-admin"
+
+# Benchmark thresholds
+benchmark_thresholds:
+  min_tokens_per_sec: 5.0
+  min_quality_score: 0.6
+  min_composite_score: 0.55
+
+# Candidate models to recommend/pull if benchmark scores are below threshold
+candidate_models:
+  - name: "qwen2.5-coder:32b-instruct-q4_K_M"
+    size_gb: 20
+    expected_tokens_sec: 4.5
+    reason: "Larger qwen2.5-coder for higher quality"
+    category: coding
+  - name: "deepseek-coder-v2:latest"
+    size_gb: 9
+    expected_tokens_sec: 8.0
+    reason: "DeepSeek Coder V2 full model"
+    category: coding
+  - name: "codegemma:7b-instruct-q5_K_M"
+    size_gb: 5.5
+    expected_tokens_sec: 12.0
+    reason: "Fast Google coding model"
+    category: coding
+  - name: "starcoder2:15b-instruct-q4_K_M"
+    size_gb: 9.5
+    expected_tokens_sec: 7.0
+    reason: "StarCoder2 coding specialist"
+    category: coding
+
+# OpenClaw default model
+openclaw_model: "llama3.2:3b"
+
+# NGINX SSL certificate paths (on nginx_proxy)
+nginx_ssl_cert: "/etc/nginx/ssl/{{ domain }}.crt"
+nginx_ssl_key: "/etc/nginx/ssl/{{ domain }}.key"

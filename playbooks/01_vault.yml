@@ -1,0 +1,518 @@
+---
+# playbooks/01_vault.yml
+# Deploy HashiCorp Vault as a native systemd service on ai_server.
+# Using the official HashiCorp RPM avoids Docker networking/SELinux issues.
+
+- name: "Vault | Deploy and configure HashiCorp Vault"
+  hosts: ai_server
+  become: true
+  gather_facts: true
+  tags:
+    - vault
+  vars:
+    vault_port: 8202
+    vault_config_dir: /etc/vault.d
+    vault_data_dir: /mnt/ai_data/vault/data
+    vault_addr: "http://127.0.0.1:{{ vault_port }}"
+    vault_init_file: "{{ playbook_dir }}/../vault/.vault-init.json"
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+
+  vars_prompt:
+    - name: telegram_token
+      prompt: "Telegram Bot Token (from @BotFather). Press ENTER to skip"
+      private: false
+      default: ""
+
+  tasks:
+    # ── Install Vault via official HashiCorp RPM ──────────────────────
+    - name: "Vault | Remove any stale HashiCorp repo file"
+      ansible.builtin.file:
+        path: /etc/yum.repos.d/hashicorp.repo
+        state: absent
+      tags:
+        - vault-install
+
+    - name: "Vault | Install dnf-plugins-core"
+      ansible.builtin.dnf:
+        name: dnf-plugins-core
+        state: present
+      tags:
+        - vault-install
+
+    - name: "Vault | Download HashiCorp RPM repo file"
+      ansible.builtin.get_url:
+        url: https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo
+        dest: /etc/yum.repos.d/hashicorp.repo
+        mode: "0644"
+      tags:
+        - vault-install
+
+    - name: "Vault | Install vault package"
+      ansible.builtin.dnf:
+        name: vault
+        state: present
+      tags:
+        - vault-install
+
+    # ── Data directory ────────────────────────────────────────────────
+    - name: "Vault | Create data directory"
+      ansible.builtin.file:
+        path: "{{ vault_data_dir }}"
+        state: directory
+        mode: "0750"
+        owner: vault
+        group: vault
+      tags:
+        - vault-dirs
+
+    # ── Configuration ─────────────────────────────────────────────────
+    - name: "Vault | Template vault.hcl configuration"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/vault/vault.hcl.j2"
+        dest: "{{ vault_config_dir }}/vault.hcl"
+        mode: "0640"
+        owner: vault
+        group: vault
+      notify: Restart vault
+      tags:
+        - vault-config
+
+    - name: "Vault | Show rendered vault.hcl"
+      ansible.builtin.command: cat {{ vault_config_dir }}/vault.hcl
+      changed_when: false
+      register: vault_hcl_content
+      tags:
+        - vault-config
+
+    - name: "Vault | Display vault.hcl"
+      ansible.builtin.debug:
+        var: vault_hcl_content.stdout_lines
+      tags:
+        - vault-config
+
+    # ── Firewall ───────────────────────────────────────────────────────
+    - name: "Vault | Open Vault port in firewalld"
+      ansible.posix.firewalld:
+        port: "{{ vault_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+      tags:
+        - vault-service
+
+    # ── Start service ─────────────────────────────────────────────────
+    - name: "Vault | Enable and start vault.service"
+      ansible.builtin.systemd:
+        name: vault
+        state: started
+        enabled: true
+        daemon_reload: true
+      tags:
+        - vault-service
+
+    - name: "Vault | Wait for Vault to become ready"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/health"
+        method: GET
+        status_code: [200, 429, 472, 473, 501, 503]
+        timeout: 5
+      register: vault_health
+      retries: 30
+      delay: 5
+      until: vault_health.status in [200, 429, 472, 473, 501, 503]
+      tags:
+        - vault-health
+
+    # ── Initialization ────────────────────────────────────────────────
+    - name: "Vault | Check if Vault is already initialized"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/health"
+        method: GET
+        status_code: [200, 429, 472, 473, 501, 503]
+      register: vault_init_check
+      tags:
+        - vault-init
+
+    - name: "Vault | Set initialization status fact"
+      ansible.builtin.set_fact:
+        vault_is_initialized: "{{ vault_init_check.status != 501 }}"
+      tags:
+        - vault-init
+
+    - name: "Vault | Initialize Vault"
+      ansible.builtin.command:
+        cmd: >-
+          vault operator init
+          -key-shares=1 -key-threshold=1 -format=json
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+      register: vault_init_output
+      when: not vault_is_initialized
+      changed_when: true
+      tags:
+        - vault-init
+
+    - name: "Vault | Ensure local vault directory exists on control node"
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/../vault"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      when: not vault_is_initialized
+      tags:
+        - vault-init
+
+    - name: "Vault | Save init output to control node"
+      ansible.builtin.copy:
+        content: "{{ vault_init_output.stdout }}"
+        dest: "{{ vault_init_file }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      when: not vault_is_initialized
+      tags:
+        - vault-init
+
+    - name: "Vault | Parse init output"
+      ansible.builtin.set_fact:
+        vault_init_data: "{{ vault_init_output.stdout | from_json }}"
+      when: not vault_is_initialized
+      tags:
+        - vault-init
+
+    - name: "Vault | Display unseal key and root token"
+      ansible.builtin.debug:
+        msg:
+          - "============================================="
+          - "  VAULT INITIALIZATION COMPLETE"
+          - "============================================="
+          - "  Unseal Key: {{ vault_init_data.unseal_keys_b64[0] }}"
+          - "  Root Token: {{ vault_init_data.root_token }}"
+          - "============================================="
+          - "  SAVE THESE VALUES SECURELY!"
+          - "============================================="
+      when: not vault_is_initialized
+      tags:
+        - vault-init
+
+    # ── Load existing init data if already initialized ────────────────
+    - name: "Vault | Load existing init data from control node"
+      ansible.builtin.slurp:
+        src: "{{ vault_init_file }}"
+      delegate_to: localhost
+      become: false
+      register: vault_init_file_content
+      when: vault_is_initialized
+      tags:
+        - vault-unseal
+
+    - name: "Vault | Parse existing init data"
+      ansible.builtin.set_fact:
+        vault_init_data: "{{ vault_init_file_content.content | b64decode | from_json }}"
+      when: vault_is_initialized
+      tags:
+        - vault-unseal
+
+    # ── Unseal ────────────────────────────────────────────────────────
+    - name: "Vault | Check seal status"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/seal-status"
+        method: GET
+      register: vault_seal_status
+      tags:
+        - vault-unseal
+
+    - name: "Vault | Unseal Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/unseal"
+        method: PUT
+        body_format: json
+        body:
+          key: "{{ vault_init_data.unseal_keys_b64[0] }}"
+        status_code: 200
+      when: vault_seal_status.json.sealed | default(true)
+      tags:
+        - vault-unseal
+
+    - name: "Vault | Set root token fact"
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ vault_init_data.root_token }}"
+      tags:
+        - vault-configure
+
+    # ── Enable KV v2 secrets engine ───────────────────────────────────
+    - name: "Vault | Check existing secrets engines"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/mounts"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: 200
+      register: vault_mounts
+      tags:
+        - vault-configure
+
+    - name: "Vault | Enable KV v2 secrets engine at 'secret'"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/mounts/secret"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          type: kv
+          options:
+            version: "2"
+        status_code: [200, 204]
+      when: "'secret/' not in vault_mounts.json"
+      tags:
+        - vault-configure
+
+    # ── Create ansible policy ─────────────────────────────────────────
+    - name: "Vault | Create ansible-policy"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/policies/acl/ansible-policy"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          policy: |
+            path "{{ vault_secret_prefix }}/*" {
+              capabilities = ["create", "read", "update", "delete", "list"]
+            }
+            path "{{ vault_secret_meta_prefix }}/*" {
+              capabilities = ["list", "read", "delete"]
+            }
+            path "{{ vault_secret_meta_prefix }}" {
+              capabilities = ["list"]
+            }
+            path "secret/metadata/" {
+              capabilities = ["list"]
+            }
+        status_code: [200, 204]
+      tags:
+        - vault-configure
+
+    # ── Create ansible token ──────────────────────────────────────────
+    - name: "Vault | Create ansible token with ansible-policy"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/auth/token/create"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          policies:
+            - ansible-policy
+          display_name: ansible
+          ttl: "8760h"
+          renewable: true
+          no_parent: true
+        status_code: 200
+      register: ansible_token_result
+      tags:
+        - vault-configure
+
+    - name: "Vault | Save ansible token to control node"
+      ansible.builtin.copy:
+        content: "{{ ansible_token_result.json.auth.client_token }}"
+        dest: "{{ vault_token_file }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      tags:
+        - vault-configure
+
+    # ── Enable AppRole auth ───────────────────────────────────────────
+    - name: "Vault | Check existing auth methods"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/auth"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: 200
+      register: vault_auth_methods
+      tags:
+        - vault-approle
+
+    - name: "Vault | Enable AppRole auth method"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/auth/approle"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          type: approle
+        status_code: [200, 204]
+      when: "'approle/' not in vault_auth_methods.json"
+      tags:
+        - vault-approle
+
+    - name: "Vault | Create {{ vault_approle_name }} AppRole"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/auth/approle/role/{{ vault_approle_name }}"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          token_policies:
+            - ansible-policy
+          token_ttl: "1h"
+          token_max_ttl: "4h"
+          secret_id_ttl: "0"
+        status_code: [200, 204]
+      tags:
+        - vault-approle
+
+    # ── Generate and populate secrets (only write if absent) ──────────
+    # Each secret is checked first — existing secrets are never overwritten.
+    # To rotate a credential, delete its Vault path and re-run this playbook.
+
+    - name: "Vault | Check existing secrets"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/{{ item }}"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: [200, 404]
+      loop:
+        - ollama
+        - openwebui
+        - keycloak
+      register: existing_secrets
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Build existing secrets map"
+      ansible.builtin.set_fact:
+        secret_exists: "{{ secret_exists | default({}) | combine({item.item: item.status == 200}) }}"
+      loop: "{{ existing_secrets.results }}"
+      tags:
+        - vault-secrets
+
+    # ── Ollama ────────────────────────────────────────────────────────
+    - name: "Vault | Generate Ollama API key"
+      ansible.builtin.command: openssl rand -hex 32
+      register: ollama_api_key
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: not secret_exists['ollama']
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Store Ollama secrets"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/ollama"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            api_key: "{{ ollama_api_key.stdout }}"
+        status_code: [200, 204]
+      when: not secret_exists['ollama']
+      tags:
+        - vault-secrets
+
+    # ── Open WebUI ────────────────────────────────────────────────────
+    - name: "Vault | Generate Open WebUI secret key"
+      ansible.builtin.command: openssl rand -hex 32
+      register: openwebui_secret_key
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: not secret_exists['openwebui']
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Store Open WebUI secrets"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/openwebui"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            secret_key: "{{ openwebui_secret_key.stdout }}"
+        status_code: [200, 204]
+      when: not secret_exists['openwebui']
+      tags:
+        - vault-secrets
+
+    # ── Keycloak ──────────────────────────────────────────────────────
+    - name: "Vault | Generate Keycloak admin password"
+      ansible.builtin.command: openssl rand -base64 16
+      register: keycloak_admin_password
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: not secret_exists['keycloak']
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Generate Keycloak client secret"
+      ansible.builtin.command: openssl rand -hex 32
+      register: keycloak_client_secret
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: not secret_exists['keycloak']
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Generate Keycloak realm admin password"
+      ansible.builtin.command: openssl rand -base64 16
+      register: keycloak_realm_admin_password
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: not secret_exists['keycloak']
+      tags:
+        - vault-secrets
+
+    - name: "Vault | Store Keycloak secrets"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/keycloak"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            admin_password: "{{ keycloak_admin_password.stdout }}"
+            client_secret: "{{ keycloak_client_secret.stdout }}"
+            realm_admin_password: "{{ keycloak_realm_admin_password.stdout }}"
+        status_code: [200, 204]
+      when: not secret_exists['keycloak']
+      tags:
+        - vault-secrets
+
+    # ── OpenClaw (always write when token is provided) ────────────────
+    - name: "Vault | Store Telegram token in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/openclaw"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            telegram_token: "{{ telegram_token }}"
+        status_code: [200, 204]
+      when: telegram_token | length > 0
+      tags:
+        - vault-secrets
+
+  handlers:
+    - name: Restart vault
+      ansible.builtin.systemd:
+        name: vault
+        state: restarted
+        daemon_reload: true

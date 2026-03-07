@@ -1,0 +1,319 @@
+---
+# playbooks/11_vault_oidc.yml
+# Configure Keycloak as an OIDC provider for Vault UI login.
+# Run this after 05_keycloak.yml — requires the realm and admin user to exist.
+
+- name: "Vault OIDC | Configure Keycloak authentication for Vault"
+  hosts: ai_server
+  become: true
+  gather_facts: false
+  tags:
+    - vault-oidc
+  vars:
+    vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
+    vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
+    vault_addr: "http://127.0.0.1:{{ vault_port }}"
+    keycloak_base_url: "http://localhost:8180"
+    vault_oidc_client_id: "vault"
+
+  tasks:
+    # ── Load root token ───────────────────────────────────────────────
+    - name: "Vault OIDC | Load Vault root token"
+      ansible.builtin.set_fact:
+        vault_root_token: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../vault/.vault-init.json') | from_json | json_query('root_token') }}"
+      delegate_to: localhost
+      become: false
+      tags: always
+
+    # ── Resolve client secret (reuse existing or generate new) ────────
+    - name: "Vault OIDC | Check for existing vault OIDC client secret"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/vault-oidc"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: [200, 404]
+      register: existing_oidc_secret
+      tags: always
+
+    - name: "Vault OIDC | Use existing client secret"
+      ansible.builtin.set_fact:
+        vault_oidc_client_secret: "{{ existing_oidc_secret.json.data.data.client_secret }}"
+      when: existing_oidc_secret.status == 200
+      tags: always
+
+    - name: "Vault OIDC | Generate new client secret"
+      ansible.builtin.command: openssl rand -hex 32
+      register: _new_secret
+      changed_when: false
+      delegate_to: localhost
+      become: false
+      when: existing_oidc_secret.status == 404
+      tags: always
+
+    - name: "Vault OIDC | Set new client secret fact"
+      ansible.builtin.set_fact:
+        vault_oidc_client_secret: "{{ _new_secret.stdout }}"
+      when: existing_oidc_secret.status == 404
+      tags: always
+
+    # ── Get Keycloak admin token ──────────────────────────────────────
+    - name: "Vault OIDC | Retrieve Keycloak admin password from Vault"
+      ansible.builtin.set_fact:
+        keycloak_admin_password: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/keycloak:admin_password token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Get Keycloak admin token"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/realms/master/protocol/openid-connect/token"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: password
+          client_id: admin-cli
+          username: admin
+          password: "{{ keycloak_admin_password }}"
+        status_code: 200
+      register: kc_token_result
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Set Keycloak token fact"
+      ansible.builtin.set_fact:
+        kc_token: "{{ kc_token_result.json.access_token }}"
+      tags:
+        - vault-oidc-keycloak
+
+    # ── Create vault OIDC client in Keycloak ─────────────────────────
+    - name: "Vault OIDC | Check if vault client exists in Keycloak"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ vault_oidc_client_id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: vault_client_check
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Create vault client in Keycloak"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          clientId: "{{ vault_oidc_client_id }}"
+          enabled: true
+          protocol: openid-connect
+          publicClient: false
+          clientAuthenticatorType: client-secret
+          secret: "{{ vault_oidc_client_secret }}"
+          redirectUris:
+            - "https://vault.{{ domain }}/ui/vault/auth/oidc/oidc/callback"
+            - "http://localhost:8250/oidc/callback"
+          webOrigins:
+            - "https://vault.{{ domain }}"
+          standardFlowEnabled: true
+          directAccessGrantsEnabled: false
+        status_code: [201, 409]
+      when: vault_client_check.json | length == 0
+      tags:
+        - vault-oidc-keycloak
+
+    # When the client already exists, Keycloak is the source of truth for the secret.
+    # POST .../client-secret regenerates a new random secret — it cannot be used to
+    # set a specific value. Instead, read whatever Keycloak currently has and use that.
+    - name: "Vault OIDC | Read existing vault client secret from Keycloak"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ vault_client_check.json[0].id }}/client-secret"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: keycloak_vault_secret
+      when: vault_client_check.json | length > 0
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Use Keycloak client secret as canonical value"
+      ansible.builtin.set_fact:
+        vault_oidc_client_secret: "{{ keycloak_vault_secret.json.value }}"
+      when: vault_client_check.json | length > 0
+      tags:
+        - vault-oidc-keycloak
+
+    # ── Add realm roles mapper to vault client ID token ───────────────
+    - name: "Vault OIDC | Re-fetch vault client to get UUID"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ vault_oidc_client_id }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: vault_client_fetched
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Set vault client UUID"
+      ansible.builtin.set_fact:
+        vault_kc_client_uuid: "{{ vault_client_fetched.json[0].id }}"
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | List existing vault client protocol mappers"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ vault_kc_client_uuid }}/protocol-mappers/models"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: vault_client_mappers
+      tags:
+        - vault-oidc-keycloak
+
+    - name: "Vault OIDC | Add realm roles mapper to ID token"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ vault_kc_client_uuid }}/protocol-mappers/models"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: "realm-roles-id-token"
+          protocol: openid-connect
+          protocolMapper: "oidc-usermodel-realm-role-mapper"
+          config:
+            "claim.name": "realm_access.roles"
+            "jsonType.label": "String"
+            "multivalued": "true"
+            "id.token.claim": "true"
+            "access.token.claim": "true"
+            "userinfo.token.claim": "true"
+        status_code: [201, 409]
+      when: vault_client_mappers.json | selectattr('name', 'equalto', 'realm-roles-id-token') | list | length == 0
+      tags:
+        - vault-oidc-keycloak
+
+    # ── Persist vault OIDC client secret in Vault ────────────────────
+    - name: "Vault OIDC | Store vault OIDC client secret in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/{{ vault_secret_prefix }}/vault-oidc"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          data:
+            client_secret: "{{ vault_oidc_client_secret }}"
+        status_code: [200, 204]
+      tags:
+        - vault-oidc-vault
+
+    # ── Enable and configure Vault OIDC auth method ───────────────────
+    - name: "Vault OIDC | Check existing Vault auth methods"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/auth"
+        method: GET
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        status_code: 200
+      register: vault_auth_methods
+      tags:
+        - vault-oidc-vault
+
+    - name: "Vault OIDC | Enable OIDC auth method in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/auth/oidc"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          type: oidc
+        status_code: [200, 204]
+      when: "'oidc/' not in vault_auth_methods.json"
+      tags:
+        - vault-oidc-vault
+
+    - name: "Vault OIDC | Configure Vault OIDC auth method"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/auth/oidc/config"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          oidc_discovery_url: "https://idm.{{ domain }}/realms/{{ keycloak_realm }}"
+          oidc_client_id: "{{ vault_oidc_client_id }}"
+          oidc_client_secret: "{{ vault_oidc_client_secret }}"
+          default_role: default
+        status_code: [200, 204]
+      tags:
+        - vault-oidc-vault
+
+    # ── Create Vault policy for Keycloak-authenticated users ──────────
+    - name: "Vault OIDC | Create vault-admin policy"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/policies/acl/vault-admin"
+        method: PUT
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          policy: |
+            path "secret/*" {
+              capabilities = ["create", "read", "update", "delete", "list"]
+            }
+            path "sys/health" {
+              capabilities = ["read"]
+            }
+            path "sys/policies/acl" {
+              capabilities = ["list"]
+            }
+            path "sys/policies/acl/*" {
+              capabilities = ["read", "list"]
+            }
+        status_code: [200, 204]
+      tags:
+        - vault-oidc-vault
+
+    # ── Create Vault OIDC role ────────────────────────────────────────
+    - name: "Vault OIDC | Create default OIDC role"
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/auth/oidc/role/default"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ vault_root_token }}"
+        body_format: json
+        body:
+          user_claim: sub
+          allowed_redirect_uris:
+            - "https://vault.{{ domain }}/ui/vault/auth/oidc/oidc/callback"
+            - "http://localhost:8250/oidc/callback"
+          bound_claims:
+            "/realm_access/roles": ["ai-admin"]
+          token_policies:
+            - vault-admin
+          token_ttl: "4h"
+          token_max_ttl: "8h"
+          oidc_scopes:
+            - openid
+            - profile
+            - email
+        status_code: [200, 204]
+      tags:
+        - vault-oidc-vault
+
+    - name: "Vault OIDC | Display login instructions"
+      ansible.builtin.debug:
+        msg: |
+          Vault OIDC login configured.
+          In the Vault UI, select method: OIDC, role: default, then click Sign in with OIDC Provider.
+          You will be redirected to Keycloak to authenticate.
+      tags:
+        - vault-oidc-vault

@@ -1,0 +1,14 @@
+---
+# ============================================================
+# Host Variables — nginx_proxy
+# NGINX reverse proxy — all public HTTPS termination
+# ============================================================
+
+# NGINX config directory
+nginx_conf_dir: /etc/nginx/conf.d
+
+# Managed configuration files on this host
+nginx_managed_configs:
+  - vault.conf
+  - ollama-api.conf
+  - keycloak-proxy.conf

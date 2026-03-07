@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {{ openclaw_data_dir }}/bot.py --config {{ openclaw_data_dir }}/config.yml
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw
+WorkingDirectory={{ openclaw_data_dir }}
+
+[Install]
+WantedBy=multi-user.target
