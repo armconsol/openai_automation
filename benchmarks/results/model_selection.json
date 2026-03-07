@@ -1,89 +1,90 @@
 {
     "all_metrics": {
         "deepseek-coder-v2": {
-            "avg_tok_per_sec": 19.8,
-            "category": "general",
-            "coding_composite": 0.602,
-            "coding_quality": 0.55,
-            "general_composite": 0.781,
-            "general_quality": 0.948,
-            "latency_ms": 1875.8,
-            "latency_score": 0.625,
-            "toks_norm": 0.661
+            "avg_tok_per_sec": 20.2,
+            "category": "coding",
+            "coding_composite": 0.738,
+            "coding_quality": 0.667,
+            "general_composite": 0.852,
+            "general_quality": 0.918,
+            "latency_ms": 1744.5,
+            "latency_score": 0.651,
+            "toks_norm": 0.919
         },
         "llama3.2:3b": {
-            "avg_tok_per_sec": 21.8,
+            "avg_tok_per_sec": 22.5,
             "category": "general",
-            "coding_composite": 0.748,
-            "coding_quality": 0.7,
-            "general_composite": 0.86,
-            "general_quality": 0.949,
-            "latency_ms": 697.1,
-            "latency_score": 0.861,
-            "toks_norm": 0.728
+            "coding_composite": 0.794,
+            "coding_quality": 0.607,
+            "general_composite": 0.967,
+            "general_quality": 0.991,
+            "latency_ms": 576.1,
+            "latency_score": 0.885,
+            "toks_norm": 1.0
         },
         "qwen2.5-coder:7b": {
-            "avg_tok_per_sec": 12.3,
-            "category": "general",
-            "coding_composite": 0.518,
-            "coding_quality": 0.6,
-            "general_composite": 0.65,
-            "general_quality": 0.895,
-            "latency_ms": 2501.0,
-            "latency_score": 0.5,
-            "toks_norm": 0.41
+            "avg_tok_per_sec": 11.2,
+            "category": "coding",
+            "coding_composite": 0.63,
+            "coding_quality": 0.64,
+            "general_composite": 0.757,
+            "general_quality": 0.922,
+            "latency_ms": 1211.5,
+            "latency_score": 0.758,
+            "toks_norm": 0.509
         }
     },
-    "coding_ranking": [],
-    "general_ranking": [
+    "coding_ranking": [
         {
-            "composite": 0.86,
+            "composite": 0.738,
             "metrics": {
-                "avg_tok_per_sec": 21.8,
-                "category": "general",
-                "coding_composite": 0.748,
-                "coding_quality": 0.7,
-                "general_composite": 0.86,
-                "general_quality": 0.949,
-                "latency_ms": 697.1,
-                "latency_score": 0.861,
-                "toks_norm": 0.728
-            },
-            "name": "llama3.2:3b"
-        },
-        {
-            "composite": 0.781,
-            "metrics": {
-                "avg_tok_per_sec": 19.8,
-                "category": "general",
-                "coding_composite": 0.602,
-                "coding_quality": 0.55,
-                "general_composite": 0.781,
-                "general_quality": 0.948,
-                "latency_ms": 1875.8,
-                "latency_score": 0.625,
-                "toks_norm": 0.661
+                "avg_tok_per_sec": 20.2,
+                "category": "coding",
+                "coding_composite": 0.738,
+                "coding_quality": 0.667,
+                "general_composite": 0.852,
+                "general_quality": 0.918,
+                "latency_ms": 1744.5,
+                "latency_score": 0.651,
+                "toks_norm": 0.919
             },
             "name": "deepseek-coder-v2"
         },
         {
-            "composite": 0.65,
+            "composite": 0.63,
             "metrics": {
-                "avg_tok_per_sec": 12.3,
-                "category": "general",
-                "coding_composite": 0.518,
-                "coding_quality": 0.6,
-                "general_composite": 0.65,
-                "general_quality": 0.895,
-                "latency_ms": 2501.0,
-                "latency_score": 0.5,
-                "toks_norm": 0.41
+                "avg_tok_per_sec": 11.2,
+                "category": "coding",
+                "coding_composite": 0.63,
+                "coding_quality": 0.64,
+                "general_composite": 0.757,
+                "general_quality": 0.922,
+                "latency_ms": 1211.5,
+                "latency_score": 0.758,
+                "toks_norm": 0.509
             },
             "name": "qwen2.5-coder:7b"
         }
     ],
+    "general_ranking": [
+        {
+            "composite": 0.967,
+            "metrics": {
+                "avg_tok_per_sec": 22.5,
+                "category": "general",
+                "coding_composite": 0.794,
+                "coding_quality": 0.607,
+                "general_composite": 0.967,
+                "general_quality": 0.991,
+                "latency_ms": 576.1,
+                "latency_score": 0.885,
+                "toks_norm": 1.0
+            },
+            "name": "llama3.2:3b"
+        }
+    ],
     "slot1_general": "llama3.2:3b",
-    "slot2_general": "deepseek-coder-v2",
-    "slot3_coding": "llama3.2:3b",
-    "slot4_coding": "none"
+    "slot2_general": "llama3.2:3b",
+    "slot3_coding": "deepseek-coder-v2",
+    "slot4_coding": "qwen2.5-coder:7b"
 }

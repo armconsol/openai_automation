@@ -81,8 +81,13 @@ benchmark_thresholds:
   min_quality_score: 0.6
   min_composite_score: 0.55
 
-benchmark_toks_norm_ceiling: 30     # Realistic max tok/sec for CPU-only inference
+benchmark_toks_norm_ceiling: 22     # Observed hardware max on Dell M630 (21.8 tok/sec measured)
 benchmark_coding_threshold: 0.10    # Delta to classify a model as coding-specialized
+
+# Explicit category overrides applied before heuristics. Keys are model names as
+# returned by `ollama list`. Valid values: 'coding' or 'general'.
+# Example: { "deepseek-coder-v2": "coding", "qwen2.5-coder:7b": "coding" }
+model_category_overrides: {}
 
 # Candidate models to recommend/pull if benchmark scores are below threshold
 candidate_models:

@@ -245,6 +245,42 @@
       tags:
         - keycloak-client
 
+    # ── Add realm roles → userinfo protocol mapper ──────────────────
+    - name: "Keycloak | Get open-webui client internal ID"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId=open-webui"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+        status_code: 200
+      register: openwebui_client_info
+      tags:
+        - keycloak-client
+
+    - name: "Keycloak | Add realm roles userinfo mapper to open-webui client"
+      ansible.builtin.uri:
+        url: "{{ keycloak_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ openwebui_client_info.json[0].id }}/protocol-mappers/models"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ kc_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          name: realm-roles-userinfo
+          protocol: openid-connect
+          protocolMapper: oidc-usermodel-realm-role-mapper
+          config:
+            claim.name: realm_access.roles
+            jsonType.label: String
+            multivalued: "true"
+            userinfo.token.claim: "true"
+            id.token.claim: "true"
+            access.token.claim: "true"
+        status_code: [201, 409]
+      when: openwebui_client_info.json | length > 0
+      tags:
+        - keycloak-client
+
     # ── Create realm roles ───────────────────────────────────────────
     - name: "Keycloak | Create ai-user role"
       ansible.builtin.uri:
