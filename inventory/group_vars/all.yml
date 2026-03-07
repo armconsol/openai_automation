@@ -81,6 +81,9 @@ benchmark_thresholds:
   min_quality_score: 0.6
   min_composite_score: 0.55
 
+benchmark_toks_norm_ceiling: 30     # Realistic max tok/sec for CPU-only inference
+benchmark_coding_threshold: 0.10    # Delta to classify a model as coding-specialized
+
 # Candidate models to recommend/pull if benchmark scores are below threshold
 candidate_models:
   - name: "qwen2.5-coder:32b-instruct-q4_K_M"
