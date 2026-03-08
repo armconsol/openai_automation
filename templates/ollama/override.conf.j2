@@ -9,12 +9,6 @@ Environment="OLLAMA_KEEP_ALIVE=-1"
 # Flash attention: fused softmax, ~20% less memory bandwidth, faster on AVX2
 Environment="OLLAMA_FLASH_ATTENTION=1"
 
-# KV cache quantization: q8_0 halves KV cache memory vs fp16.
-# Attention reads dominate memory bandwidth at long contexts; smaller KV =
-# fewer bytes transferred per token generated. q8_0 over q4_0: negligible
-# quality loss vs significant noise at long contexts with q4_0.
-Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
-
 # Threads: 14 physical cores on NUMA node 1 only (no hyperthreads).
 # LLM inference is memory-bandwidth-bound; HT siblings share the same memory
 # pipeline and add scheduling overhead without adding bandwidth.
@@ -24,7 +18,7 @@ Environment="OLLAMA_NUM_THREADS={{ ollama_num_threads }}"
 # Keeps per-request throughput high for interactive/single-user workloads.
 Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
 
-# Keep 4 models warm in RAM (KEEP_ALIVE=-1 means never unload)
+# Keep 3 models warm in RAM per instance (KEEP_ALIVE=-1 means never unload; 6 total across both sockets)
 Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
 
 # ── NUMA / CPU binding ────────────────────────────────────────────────────

@@ -20,9 +20,9 @@ warmup_model() {
 
 warmup_model "{{ model_selection.slot1_general }}"
 warmup_model "{{ model_selection.slot2_general }}"
-warmup_model "{{ model_selection.slot3_coding }}"
-{% if model_selection.slot4_coding | length > 0 and model_selection.slot4_coding != 'none' %}
-warmup_model "{{ model_selection.slot4_coding }}"
+{% if model_selection.slot5_general_rotate | default('') | length > 0
+      and model_selection.slot5_general_rotate | default('none') != 'none' %}
+warmup_model "{{ model_selection.slot5_general_rotate }}"
 {% endif %}
 
-echo "[warmup] All models warmed up."
+echo "[warmup] All Node 1 general models warmed up."

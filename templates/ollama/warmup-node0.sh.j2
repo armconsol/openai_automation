@@ -1,0 +1,28 @@
+#!/bin/bash
+# Ollama Node 0 model warm-up script (coding models, port {{ ollama_node0_port }})
+# Sends a 1-token generation to each slot model to pin them in RAM
+
+set -e
+
+OLLAMA_URL="http://localhost:{{ ollama_node0_port }}"
+API_KEY="{{ ollama_api_key }}"
+
+warmup_model() {
+    local model="$1"
+    echo "[warmup-node0] Loading: $model"
+    curl -sf -X POST "${OLLAMA_URL}/api/generate" \
+        -H "Authorization: Bearer ${API_KEY}" \
+        -H "Content-Type: application/json" \
+        -d "{\"model\":\"${model}\",\"prompt\":\"Hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+        > /dev/null || echo "[warmup-node0] Warning: failed to warm up ${model}"
+    echo "[warmup-node0] Done: $model"
+}
+
+warmup_model "{{ model_selection.slot3_coding }}"
+warmup_model "{{ model_selection.slot4_coding }}"
+{% if model_selection.slot6_coding_rotate | default('') | length > 0
+      and model_selection.slot6_coding_rotate | default('none') != 'none' %}
+warmup_model "{{ model_selection.slot6_coding_rotate }}"
+{% endif %}
+
+echo "[warmup-node0] All Node 0 coding models warmed up."

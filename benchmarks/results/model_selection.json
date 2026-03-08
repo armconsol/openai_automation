@@ -1,116 +1,39 @@
 {
     "all_metrics": {
-        "deepseek-coder-v2:latest": {
-            "avg_tok_per_sec": 21.6,
+        "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b": {
+            "avg_tok_per_sec": 0.0,
             "category": "coding",
-            "coding_composite": 0.764,
-            "coding_quality": 0.657,
-            "general_composite": 0.867,
-            "general_quality": 0.886,
-            "latency_ms": 1510.5,
-            "latency_score": 0.698,
-            "toks_norm": 0.982
-        },
-        "gemma3:12b-it-q4_K_M": {
-            "avg_tok_per_sec": 5.6,
-            "category": "general",
-            "coding_composite": 0.416,
-            "coding_quality": 0.757,
-            "general_composite": 0.495,
-            "general_quality": 0.931,
-            "latency_ms": 5975.8,
+            "coding_composite": 0.0,
+            "coding_quality": 0,
+            "general_composite": 0.0,
+            "general_quality": 0,
+            "latency_ms": 9999,
             "latency_score": 0,
-            "toks_norm": 0.253
-        },
-        "llama3.2:3b": {
-            "avg_tok_per_sec": 22.5,
-            "category": "general",
-            "coding_composite": 0.846,
-            "coding_quality": 0.723,
-            "general_composite": 0.961,
-            "general_quality": 0.979,
-            "latency_ms": 580.7,
-            "latency_score": 0.884,
-            "toks_norm": 1.0
-        },
-        "qwen2.5-coder:7b": {
-            "avg_tok_per_sec": 12.3,
-            "category": "coding",
-            "coding_composite": 0.664,
-            "coding_quality": 0.683,
-            "general_composite": 0.756,
-            "general_quality": 0.888,
-            "latency_ms": 1222.4,
-            "latency_score": 0.756,
-            "toks_norm": 0.56
+            "toks_norm": 0.0
         }
     },
     "coding_ranking": [
         {
-            "composite": 0.764,
+            "composite": 0.0,
             "metrics": {
-                "avg_tok_per_sec": 21.6,
+                "avg_tok_per_sec": 0.0,
                 "category": "coding",
-                "coding_composite": 0.764,
-                "coding_quality": 0.657,
-                "general_composite": 0.867,
-                "general_quality": 0.886,
-                "latency_ms": 1510.5,
-                "latency_score": 0.698,
-                "toks_norm": 0.982
-            },
-            "name": "deepseek-coder-v2:latest"
-        },
-        {
-            "composite": 0.664,
-            "metrics": {
-                "avg_tok_per_sec": 12.3,
-                "category": "coding",
-                "coding_composite": 0.664,
-                "coding_quality": 0.683,
-                "general_composite": 0.756,
-                "general_quality": 0.888,
-                "latency_ms": 1222.4,
-                "latency_score": 0.756,
-                "toks_norm": 0.56
-            },
-            "name": "qwen2.5-coder:7b"
-        }
-    ],
-    "general_ranking": [
-        {
-            "composite": 0.961,
-            "metrics": {
-                "avg_tok_per_sec": 22.5,
-                "category": "general",
-                "coding_composite": 0.846,
-                "coding_quality": 0.723,
-                "general_composite": 0.961,
-                "general_quality": 0.979,
-                "latency_ms": 580.7,
-                "latency_score": 0.884,
-                "toks_norm": 1.0
-            },
-            "name": "llama3.2:3b"
-        },
-        {
-            "composite": 0.495,
-            "metrics": {
-                "avg_tok_per_sec": 5.6,
-                "category": "general",
-                "coding_composite": 0.416,
-                "coding_quality": 0.757,
-                "general_composite": 0.495,
-                "general_quality": 0.931,
-                "latency_ms": 5975.8,
+                "coding_composite": 0.0,
+                "coding_quality": 0,
+                "general_composite": 0.0,
+                "general_quality": 0,
+                "latency_ms": 9999,
                 "latency_score": 0,
-                "toks_norm": 0.253
+                "toks_norm": 0.0
             },
-            "name": "gemma3:12b-it-q4_K_M"
+            "name": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b"
         }
     ],
-    "slot1_general": "llama3.2:3b",
-    "slot2_general": "gemma3:12b-it-q4_K_M",
-    "slot3_coding": "deepseek-coder-v2:latest",
-    "slot4_coding": "qwen2.5-coder:7b"
+    "general_ranking": [],
+    "slot1_general": "none",
+    "slot2_general": "none",
+    "slot3_coding": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b",
+    "slot4_coding": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b",
+    "slot5_general_rotate": "none",
+    "slot6_coding_rotate": "none"
 }

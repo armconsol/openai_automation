@@ -1,0 +1,26 @@
+[Unit]
+Description=Ollama Service — NUMA Node 0 (Coding Models)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/numactl --membind=0 {{ ollama_binary_path }} serve
+Environment="OLLAMA_API_KEY={{ ollama_api_key }}"
+Environment="OLLAMA_HOST=0.0.0.0:{{ ollama_node0_port }}"
+Environment="OLLAMA_MODELS={{ ollama_models_path }}"
+Environment="OLLAMA_KEEP_ALIVE={{ ollama_keep_alive }}"
+Environment="OLLAMA_FLASH_ATTENTION={{ ollama_flash_attention }}"
+Environment="OLLAMA_NUM_THREADS={{ ollama_num_threads }}"
+Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
+Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
+CPUAffinity={{ ollama_node0_cpu_affinity }}
+LimitMEMLOCK=infinity
+LimitNOFILE=65535
+OOMScoreAdjust=-500
+Restart=always
+RestartSec=3
+User=ollama
+Group=ollama
+
+[Install]
+WantedBy=multi-user.target
