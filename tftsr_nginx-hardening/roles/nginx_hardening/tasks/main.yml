@@ -1,0 +1,44 @@
+---
+- name: Deploy security headers configuration
+  ansible.builtin.template:
+    src: security_headers.conf.j2
+    dest: /etc/nginx/conf.d/00-security-headers.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload nginx
+
+- name: Deploy SSL parameters configuration
+  ansible.builtin.template:
+    src: ssl_params.conf.j2
+    dest: /etc/nginx/conf.d/00-ssl-params.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload nginx
+
+- name: Deploy proxy parameters configuration
+  ansible.builtin.template:
+    src: proxy_params.conf.j2
+    dest: /etc/nginx/conf.d/00-proxy-params.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload nginx
+
+- name: Deploy HTTP to HTTPS redirect configuration
+  ansible.builtin.template:
+    src: http_redirect.conf.j2
+    dest: /etc/nginx/conf.d/00-http-redirects.conf
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload nginx
+
+- name: Validate NGINX configuration
+  ansible.builtin.command: nginx -t
+  changed_when: false

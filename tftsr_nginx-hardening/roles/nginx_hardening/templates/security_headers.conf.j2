@@ -1,0 +1,17 @@
+# Managed by Ansible — do not edit manually
+
+server_tokens off;
+
+# Rate limiting zone definition
+limit_req_zone {{ nginx_rate_limit_req_zone }};
+
+# Client body size limit
+client_max_body_size {{ nginx_client_max_body_size }};
+
+# Security headers
+add_header Strict-Transport-Security "max-age={{ nginx_hsts_max_age }}; includeSubDomains; preload" always;
+add_header X-Frame-Options SAMEORIGIN always;
+add_header X-Content-Type-Options nosniff always;
+add_header Referrer-Policy strict-origin-when-cross-origin always;
+add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+add_header X-XSS-Protection "1; mode=block" always;

@@ -1,0 +1,103 @@
+---
+- name: Ensure nftables.d directory exists
+  ansible.builtin.file:
+    path: "{{ geo_nft_table_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create temp directory for zone files
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: geo_zones
+  register: geo_temp_dir
+
+# --- Source: live download ---
+
+- name: Test connectivity to ipdeny.com (fast pre-check)
+  ansible.builtin.uri:
+    url: "{{ geo_ipdeny_base_url }}/us-aggregated.zone"
+    method: HEAD
+    timeout: 8
+  register: geo_connectivity_check
+  ignore_errors: yes
+  when: geo_zone_files_dir | length == 0
+
+- name: Fail fast if ipdeny.com is unreachable and no local cache configured
+  ansible.builtin.fail:
+    msg: >-
+      Cannot reach ipdeny.com (connection timed out or refused) and
+      geo_zone_files_dir is not set. Pre-download zone files on a machine
+      with internet access using scripts/download-geo-zones.sh, copy them
+      to this host, then set geo_zone_files_dir in inventory or with -e.
+  when:
+    - geo_zone_files_dir | length == 0
+    - geo_connectivity_check is failed
+
+- name: Download zone files for blocked countries
+  ansible.builtin.get_url:
+    url: "{{ geo_ipdeny_base_url }}/{{ item.code | lower }}-aggregated.zone"
+    dest: "{{ geo_temp_dir.path }}/{{ item.code | lower }}.zone"
+    timeout: 30
+  loop: "{{ geo_countries | selectattr('blocked', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.code }}"
+  ignore_errors: yes
+  when:
+    - geo_zone_files_dir | length == 0
+    - geo_connectivity_check is succeeded
+
+# --- Source: local pre-downloaded cache ---
+
+- name: Copy zone files from local cache directory
+  ansible.builtin.copy:
+    src: "{{ geo_zone_files_dir }}/{{ item.code | lower }}.zone"
+    dest: "{{ geo_temp_dir.path }}/{{ item.code | lower }}.zone"
+    remote_src: yes
+  loop: "{{ geo_countries | selectattr('blocked', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.code }}"
+  ignore_errors: yes
+  when: geo_zone_files_dir | length > 0
+
+# --- Assemble and deploy ---
+
+- name: Assemble all CIDRs from downloaded zone files
+  ansible.builtin.shell: >
+    cat {{ geo_temp_dir.path }}/*.zone 2>/dev/null |
+    grep -v '^#' | grep -v '^$' | sort -u
+  register: geo_cidrs_raw
+  changed_when: false
+
+- name: Set geo_blocked_cidrs fact
+  ansible.builtin.set_fact:
+    geo_blocked_cidrs: "{{ geo_cidrs_raw.stdout_lines }}"
+
+- name: Deploy geo-block nftables ruleset
+  ansible.builtin.template:
+    src: geo-block.nft.j2
+    dest: "{{ geo_nft_file }}"
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: reload nftables
+
+- name: Ensure nftables.conf includes geo-block.nft
+  ansible.builtin.lineinfile:
+    path: /etc/sysconfig/nftables.conf
+    line: 'include "{{ geo_nft_file }}"'
+    state: present
+    backup: yes
+
+- name: Enable and start nftables service
+  ansible.builtin.service:
+    name: nftables
+    state: started
+    enabled: yes
+
+- name: Clean up temp directory
+  ansible.builtin.file:
+    path: "{{ geo_temp_dir.path }}"
+    state: absent

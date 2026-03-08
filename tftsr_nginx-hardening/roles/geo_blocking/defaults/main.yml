@@ -1,0 +1,509 @@
+---
+geo_ipdeny_base_url: "https://www.ipdeny.com/ipblocks/data/aggregated"
+geo_nft_table_dir: "/etc/nftables.d"
+geo_nft_file: "/etc/nftables.d/geo-block.nft"
+# Set this to a directory containing pre-downloaded {cc}.zone files when the
+# target host has no outbound internet access. Leave empty to download live.
+geo_zone_files_dir: ""
+
+geo_countries:
+  - code: AD   # Andorra
+    blocked: true
+  - code: AE   # United Arab Emirates
+    blocked: true
+  - code: AF   # Afghanistan
+    blocked: true
+  - code: AG   # Antigua and Barbuda
+    blocked: true
+  - code: AI   # Anguilla
+    blocked: true
+  - code: AL   # Albania
+    blocked: true
+  - code: AM   # Armenia
+    blocked: true
+  - code: AO   # Angola
+    blocked: true
+  - code: AQ   # Antarctica
+    blocked: true
+  - code: AR   # Argentina
+    blocked: true
+  - code: AS   # American Samoa
+    blocked: true
+  - code: AT   # Austria
+    blocked: true
+  - code: AU   # Australia
+    blocked: true
+  - code: AW   # Aruba
+    blocked: true
+  - code: AX   # Aland Islands
+    blocked: true
+  - code: AZ   # Azerbaijan
+    blocked: true
+  - code: BA   # Bosnia and Herzegovina
+    blocked: true
+  - code: BB   # Barbados
+    blocked: true
+  - code: BD   # Bangladesh
+    blocked: true
+  - code: BE   # Belgium
+    blocked: true
+  - code: BF   # Burkina Faso
+    blocked: true
+  - code: BG   # Bulgaria
+    blocked: true
+  - code: BH   # Bahrain
+    blocked: true
+  - code: BI   # Burundi
+    blocked: true
+  - code: BJ   # Benin
+    blocked: true
+  - code: BL   # Saint Barthelemy
+    blocked: true
+  - code: BM   # Bermuda
+    blocked: true
+  - code: BN   # Brunei Darussalam
+    blocked: true
+  - code: BO   # Bolivia
+    blocked: true
+  - code: BQ   # Bonaire
+    blocked: true
+  - code: BR   # Brazil
+    blocked: true
+  - code: BS   # Bahamas
+    blocked: true
+  - code: BT   # Bhutan
+    blocked: true
+  - code: BV   # Bouvet Island — no ipdeny zone file
+    blocked: false
+  - code: BW   # Botswana
+    blocked: true
+  - code: BY   # Belarus
+    blocked: true
+  - code: BZ   # Belize
+    blocked: true
+  - code: CA   # Canada
+    blocked: true
+  - code: CC   # Cocos Islands
+    blocked: true
+  - code: CD   # Dem. Rep. Congo
+    blocked: true
+  - code: CF   # Central African Republic
+    blocked: true
+  - code: CG   # Congo
+    blocked: true
+  - code: CH   # Switzerland
+    blocked: true
+  - code: CI   # Cote d'Ivoire
+    blocked: true
+  - code: CK   # Cook Islands
+    blocked: true
+  - code: CL   # Chile
+    blocked: true
+  - code: CM   # Cameroon
+    blocked: true
+  - code: CN   # China
+    blocked: true
+  - code: CO   # Colombia
+    blocked: true
+  - code: CR   # Costa Rica
+    blocked: true
+  - code: CU   # Cuba
+    blocked: true
+  - code: CV   # Cabo Verde
+    blocked: true
+  - code: CW   # Curacao
+    blocked: true
+  - code: CX   # Christmas Island — no ipdeny zone file
+    blocked: false
+  - code: CY   # Cyprus
+    blocked: true
+  - code: CZ   # Czechia
+    blocked: true
+  - code: DE   # Germany
+    blocked: true
+  - code: DJ   # Djibouti
+    blocked: true
+  - code: DK   # Denmark
+    blocked: true
+  - code: DM   # Dominica
+    blocked: true
+  - code: DO   # Dominican Republic
+    blocked: true
+  - code: DZ   # Algeria
+    blocked: true
+  - code: EC   # Ecuador
+    blocked: true
+  - code: EE   # Estonia
+    blocked: true
+  - code: EG   # Egypt
+    blocked: true
+  - code: EH   # Western Sahara — no ipdeny zone file
+    blocked: false
+  - code: ER   # Eritrea
+    blocked: true
+  - code: ES   # Spain
+    blocked: true
+  - code: ET   # Ethiopia
+    blocked: true
+  - code: FI   # Finland
+    blocked: true
+  - code: FJ   # Fiji
+    blocked: true
+  - code: FK   # Falkland Islands
+    blocked: true
+  - code: FM   # Micronesia
+    blocked: true
+  - code: FO   # Faroe Islands
+    blocked: true
+  - code: FR   # France
+    blocked: true
+  - code: GA   # Gabon
+    blocked: true
+  - code: GB   # United Kingdom
+    blocked: true
+  - code: GD   # Grenada
+    blocked: true
+  - code: GE   # Georgia
+    blocked: true
+  - code: GF   # French Guiana
+    blocked: true
+  - code: GG   # Guernsey
+    blocked: true
+  - code: GH   # Ghana
+    blocked: true
+  - code: GI   # Gibraltar
+    blocked: true
+  - code: GL   # Greenland
+    blocked: true
+  - code: GM   # Gambia
+    blocked: true
+  - code: GN   # Guinea
+    blocked: true
+  - code: GP   # Guadeloupe
+    blocked: true
+  - code: GQ   # Equatorial Guinea
+    blocked: true
+  - code: GR   # Greece
+    blocked: true
+  - code: GS   # South Georgia — no ipdeny zone file
+    blocked: false
+  - code: GT   # Guatemala
+    blocked: true
+  - code: GU   # Guam
+    blocked: true
+  - code: GW   # Guinea-Bissau
+    blocked: true
+  - code: GY   # Guyana
+    blocked: true
+  - code: HK   # Hong Kong
+    blocked: true
+  - code: HM   # Heard Island — no ipdeny zone file
+    blocked: false
+  - code: HN   # Honduras
+    blocked: true
+  - code: HR   # Croatia
+    blocked: true
+  - code: HT   # Haiti
+    blocked: true
+  - code: HU   # Hungary
+    blocked: true
+  - code: ID   # Indonesia
+    blocked: true
+  - code: IE   # Ireland
+    blocked: true
+  - code: IL   # Israel
+    blocked: true
+  - code: IM   # Isle of Man
+    blocked: true
+  - code: IN   # India
+    blocked: true
+  - code: IO   # British Indian Ocean Territory
+    blocked: true
+  - code: IQ   # Iraq
+    blocked: true
+  - code: IR   # Iran
+    blocked: true
+  - code: IS   # Iceland
+    blocked: true
+  - code: IT   # Italy
+    blocked: true
+  - code: JE   # Jersey
+    blocked: true
+  - code: JM   # Jamaica
+    blocked: true
+  - code: JO   # Jordan
+    blocked: true
+  - code: JP   # Japan
+    blocked: true
+  - code: KE   # Kenya
+    blocked: true
+  - code: KG   # Kyrgyzstan
+    blocked: true
+  - code: KH   # Cambodia
+    blocked: true
+  - code: KI   # Kiribati
+    blocked: true
+  - code: KM   # Comoros
+    blocked: true
+  - code: KN   # Saint Kitts and Nevis
+    blocked: true
+  - code: KP   # North Korea
+    blocked: true
+  - code: KR   # South Korea
+    blocked: true
+  - code: KW   # Kuwait
+    blocked: true
+  - code: KY   # Cayman Islands
+    blocked: true
+  - code: KZ   # Kazakhstan
+    blocked: true
+  - code: LA   # Laos
+    blocked: true
+  - code: LB   # Lebanon
+    blocked: true
+  - code: LC   # Saint Lucia
+    blocked: true
+  - code: LI   # Liechtenstein
+    blocked: true
+  - code: LK   # Sri Lanka
+    blocked: true
+  - code: LR   # Liberia
+    blocked: true
+  - code: LS   # Lesotho
+    blocked: true
+  - code: LT   # Lithuania
+    blocked: true
+  - code: LU   # Luxembourg
+    blocked: true
+  - code: LV   # Latvia
+    blocked: true
+  - code: LY   # Libya
+    blocked: true
+  - code: MA   # Morocco
+    blocked: true
+  - code: MC   # Monaco
+    blocked: true
+  - code: MD   # Moldova
+    blocked: true
+  - code: ME   # Montenegro
+    blocked: true
+  - code: MF   # Saint Martin
+    blocked: true
+  - code: MG   # Madagascar
+    blocked: true
+  - code: MH   # Marshall Islands
+    blocked: true
+  - code: MK   # North Macedonia
+    blocked: true
+  - code: ML   # Mali
+    blocked: true
+  - code: MM   # Myanmar
+    blocked: true
+  - code: MN   # Mongolia
+    blocked: true
+  - code: MO   # Macao
+    blocked: true
+  - code: MP   # Northern Mariana Islands
+    blocked: true
+  - code: MQ   # Martinique
+    blocked: true
+  - code: MR   # Mauritania
+    blocked: true
+  - code: MS   # Montserrat
+    blocked: true
+  - code: MT   # Malta
+    blocked: true
+  - code: MU   # Mauritius
+    blocked: true
+  - code: MV   # Maldives
+    blocked: true
+  - code: MW   # Malawi
+    blocked: true
+  - code: MX   # Mexico
+    blocked: true
+  - code: MY   # Malaysia
+    blocked: true
+  - code: MZ   # Mozambique
+    blocked: true
+  - code: NA   # Namibia
+    blocked: true
+  - code: NC   # New Caledonia
+    blocked: true
+  - code: NE   # Niger
+    blocked: true
+  - code: NF   # Norfolk Island
+    blocked: true
+  - code: NG   # Nigeria
+    blocked: true
+  - code: NI   # Nicaragua
+    blocked: true
+  - code: NL   # Netherlands
+    blocked: true
+  - code: "NO"  # Norway
+    blocked: true
+  - code: NP   # Nepal
+    blocked: true
+  - code: NR   # Nauru
+    blocked: true
+  - code: NU   # Niue
+    blocked: true
+  - code: NZ   # New Zealand
+    blocked: true
+  - code: OM   # Oman
+    blocked: true
+  - code: PA   # Panama
+    blocked: true
+  - code: PE   # Peru
+    blocked: true
+  - code: PF   # French Polynesia
+    blocked: true
+  - code: PG   # Papua New Guinea
+    blocked: true
+  - code: PH   # Philippines
+    blocked: true
+  - code: PK   # Pakistan
+    blocked: true
+  - code: PL   # Poland
+    blocked: true
+  - code: PM   # Saint Pierre and Miquelon
+    blocked: true
+  - code: PN   # Pitcairn — no ipdeny zone file
+    blocked: false
+  - code: PR   # Puerto Rico
+    blocked: true
+  - code: PS   # Palestine
+    blocked: true
+  - code: PT   # Portugal
+    blocked: true
+  - code: PW   # Palau
+    blocked: true
+  - code: PY   # Paraguay
+    blocked: true
+  - code: QA   # Qatar
+    blocked: true
+  - code: RE   # Reunion
+    blocked: true
+  - code: RO   # Romania
+    blocked: true
+  - code: RS   # Serbia
+    blocked: true
+  - code: RU   # Russia
+    blocked: true
+  - code: RW   # Rwanda
+    blocked: true
+  - code: SA   # Saudi Arabia
+    blocked: true
+  - code: SB   # Solomon Islands
+    blocked: true
+  - code: SC   # Seychelles
+    blocked: true
+  - code: SD   # Sudan
+    blocked: true
+  - code: SE   # Sweden
+    blocked: true
+  - code: SG   # Singapore
+    blocked: true
+  - code: SH   # Saint Helena — no ipdeny zone file
+    blocked: false
+  - code: SI   # Slovenia
+    blocked: true
+  - code: SJ   # Svalbard and Jan Mayen — no ipdeny zone file
+    blocked: false
+  - code: SK   # Slovakia
+    blocked: true
+  - code: SL   # Sierra Leone
+    blocked: true
+  - code: SM   # San Marino
+    blocked: true
+  - code: SN   # Senegal
+    blocked: true
+  - code: SO   # Somalia
+    blocked: true
+  - code: SR   # Suriname
+    blocked: true
+  - code: SS   # South Sudan
+    blocked: true
+  - code: ST   # Sao Tome and Principe
+    blocked: true
+  - code: SV   # El Salvador
+    blocked: true
+  - code: SX   # Sint Maarten
+    blocked: true
+  - code: SY   # Syria
+    blocked: true
+  - code: SZ   # Eswatini
+    blocked: true
+  - code: TC   # Turks and Caicos Islands
+    blocked: true
+  - code: TD   # Chad
+    blocked: true
+  - code: TF   # French Southern Territories — no ipdeny zone file
+    blocked: false
+  - code: TG   # Togo
+    blocked: true
+  - code: TH   # Thailand
+    blocked: true
+  - code: TJ   # Tajikistan
+    blocked: true
+  - code: TK   # Tokelau
+    blocked: true
+  - code: TL   # Timor-Leste
+    blocked: true
+  - code: TM   # Turkmenistan
+    blocked: true
+  - code: TN   # Tunisia
+    blocked: true
+  - code: TO   # Tonga
+    blocked: true
+  - code: TR   # Turkey
+    blocked: true
+  - code: TT   # Trinidad and Tobago
+    blocked: true
+  - code: TV   # Tuvalu
+    blocked: true
+  - code: TW   # Taiwan
+    blocked: true
+  - code: TZ   # Tanzania
+    blocked: true
+  - code: UA   # Ukraine
+    blocked: true
+  - code: UG   # Uganda
+    blocked: true
+  - code: UM   # US Minor Outlying Islands
+    blocked: true
+  - code: US   # United States
+    blocked: false
+  - code: UY   # Uruguay
+    blocked: true
+  - code: UZ   # Uzbekistan
+    blocked: true
+  - code: VA   # Vatican City
+    blocked: true
+  - code: VC   # Saint Vincent and the Grenadines
+    blocked: true
+  - code: VE   # Venezuela
+    blocked: true
+  - code: VG   # British Virgin Islands
+    blocked: true
+  - code: VI   # US Virgin Islands
+    blocked: true
+  - code: VN   # Vietnam
+    blocked: true
+  - code: VU   # Vanuatu
+    blocked: true
+  - code: WF   # Wallis and Futuna
+    blocked: true
+  - code: WS   # Samoa
+    blocked: true
+  - code: XK   # Kosovo — no ipdeny zone file
+    blocked: false
+  - code: YE   # Yemen
+    blocked: true
+  - code: YT   # Mayotte
+    blocked: true
+  - code: ZA   # South Africa
+    blocked: true
+  - code: ZM   # Zambia
+    blocked: true
+  - code: ZW   # Zimbabwe
+    blocked: true

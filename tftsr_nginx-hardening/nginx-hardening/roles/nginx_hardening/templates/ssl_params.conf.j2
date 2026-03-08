@@ -1,0 +1,10 @@
+# Managed by Ansible — do not edit manually
+
+ssl_protocols {{ nginx_ssl_protocols }};
+ssl_ciphers {{ nginx_ssl_ciphers }};
+ssl_prefer_server_ciphers off;
+ssl_session_timeout 1d;
+ssl_stapling on;
+ssl_stapling_verify on;
+resolver 8.8.8.8 8.8.4.4 valid=300s;
+resolver_timeout 5s;

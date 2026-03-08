@@ -1,0 +1,8 @@
+# Managed by Ansible — do not edit manually
+{% for svc in nginx_redirect_services %}
+server {
+    listen 80;
+    server_name {{ svc.server_name }};
+    return 301 https://$host$request_uri;
+}
+{% endfor %}

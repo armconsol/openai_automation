@@ -1,0 +1,4 @@
+---
+- name: reload nftables
+  ansible.builtin.command: nft -f {{ geo_nft_file }}
+  changed_when: true
