@@ -9,21 +9,33 @@ Environment="OLLAMA_KEEP_ALIVE=-1"
 # Flash attention: fused softmax, ~20% less memory bandwidth, faster on AVX2
 Environment="OLLAMA_FLASH_ATTENTION=1"
 
-# Threads: 28 logical CPUs on NUMA node 1 (14 physical cores × 2 HT)
-# Covers all threads on the socket so no cross-socket migrations occur
+# KV cache quantization: q8_0 halves KV cache memory vs fp16.
+# Attention reads dominate memory bandwidth at long contexts; smaller KV =
+# fewer bytes transferred per token generated. q8_0 over q4_0: negligible
+# quality loss vs significant noise at long contexts with q4_0.
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
+
+# Threads: 14 physical cores on NUMA node 1 only (no hyperthreads).
+# LLM inference is memory-bandwidth-bound; HT siblings share the same memory
+# pipeline and add scheduling overhead without adding bandwidth.
 Environment="OLLAMA_NUM_THREADS={{ ollama_num_threads }}"
 
-# Parallel inference streams — 4 simultaneous requests, 7 threads each
+# Parallel inference streams — 2 simultaneous requests, 7 threads each.
+# Keeps per-request throughput high for interactive/single-user workloads.
 Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
 
 # Keep 4 models warm in RAM (KEEP_ALIVE=-1 means never unload)
 Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
 
 # ── NUMA / CPU binding ────────────────────────────────────────────────────
-# Pin all Ollama threads to NUMA node 1 CPUs (odd: 1,3,5,...,55).
-# Node 1 has ~120 GB free RAM vs node 0's ~75 GB.
-# CPUAffinity prevents cross-NUMA thread migration; Linux will naturally
-# allocate memory from the local node when all threads are on that node.
+# ExecStart override: numactl --membind=1 guarantees model weights and KV
+# cache are allocated from NUMA node 1 RAM (120 GB free). CPUAffinity alone
+# does not set the memory policy; numactl makes it explicit.
+ExecStart=
+ExecStart=/usr/bin/numactl --membind=1 {{ ollama_binary_path }} serve
+
+# Restrict scheduler to physical cores on node 1 only (odd CPUs 1–27).
+# Omitting HT siblings (29–55) prevents cross-HT contention on the memory bus.
 CPUAffinity={{ ollama_cpu_affinity }}
 
 # ── Memory hardening ───────────────────────────────────────────────────────

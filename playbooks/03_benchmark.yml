@@ -172,7 +172,13 @@
           {%         set has_type_hint = 1 if ' -> ' in response_text else 0 %}
           {%         set has_code_block = 1 if '```' in response_text else 0 %}
           {%         set has_import = 1 if ('import ' in response_text or 'from ' in response_text) else 0 %}
-          {%         set quality = (has_def * 0.20 + has_return * 0.20 + has_docstring * 0.15 + has_type_hint * 0.15 + has_code_block * 0.10 + has_assert * 0.08 + has_test_def * 0.07 + has_import * 0.05) %}
+          {%         if test_name == 'code_gen' %}
+          {%           set quality = (has_def * 0.20 + has_return * 0.20 + has_docstring * 0.15 + has_type_hint * 0.15 + has_code_block * 0.10 + has_assert * 0.08 + has_test_def * 0.07 + has_import * 0.05) %}
+          {%         elif test_name == 'debug' %}
+          {%           set quality = (has_def * 0.30 + has_return * 0.30 + has_code_block * 0.25 + has_assert * 0.15) %}
+          {%         else %}
+          {%           set quality = (has_def * 0.25 + has_return * 0.25 + has_code_block * 0.20 + has_type_hint * 0.15 + has_import * 0.15) %}
+          {%         endif %}
           {%         set ns2.coding_quality = ns2.coding_quality + quality %}
           {%         set ns2.coding_count = ns2.coding_count + 1 %}
           {%       elif test_name in ['explain', 'creative', 'reasoning'] %}
@@ -293,7 +299,10 @@
           ## Scoring Formula
           - Composite = quality * 0.45 + token_speed_normalized * 0.30 + latency_score * 0.25
           - Speed normalized against {{ benchmark_toks_norm_ceiling }} tok/sec ceiling (hardware-observed max)
-          - Coding quality: has_def×0.20 + has_return×0.20 + has_docstring×0.15 + has_type_hint×0.15 + has_code_block×0.10 + has_assert×0.08 + has_test_def×0.07 + has_import×0.05
+          - Coding quality (per-prompt):
+            code_gen: has_def×0.20 + has_return×0.20 + has_docstring×0.15 + has_type_hint×0.15 + has_code_block×0.10 + has_assert×0.08 + has_test_def×0.07 + has_import×0.05
+            debug:    has_def×0.30 + has_return×0.30 + has_code_block×0.25 + has_assert×0.15
+            refactor: has_def×0.25 + has_return×0.25 + has_code_block×0.20 + has_type_hint×0.15 + has_import×0.15
           - Category: override dict → quality delta (coding_avg - general_avg >= {{ benchmark_coding_threshold }}) → name pattern (coder/codestral/codellama/starcoder) → general
         dest: "{{ benchmark_results_dir }}/benchmark_{{ benchmark_timestamp }}.md"
         mode: "0644"

@@ -11,12 +11,6 @@
   vars:
     vault_token_file: "{{ playbook_dir }}/../vault/.vault-token"
     vault_url: "http://{{ ai_server_ip }}:{{ vault_port }}"
-    ollama_num_threads: 28
-    ollama_num_parallel: 4
-    ollama_max_loaded_models: 4
-    ollama_keep_alive: "-1"
-    ollama_numa_node: "1"
-    ollama_cpu_affinity: "1 3 5 7 9 11 13 15 17 19 21 23 25 27 29 31 33 35 37 39 41 43 45 47 49 51 53 55"
 
   pre_tasks:
     - name: "Infrastructure | Install Python Docker SDK prerequisites"
@@ -24,6 +18,7 @@
         name:
           - python3-pip
           - python3-requests
+          - numactl
         state: present
       tags: always
 
@@ -160,9 +155,112 @@
       tags:
         - ollama
 
+    # ── OS-level kernel tuning for dedicated inference server ────────────────
+    - name: "OS Tune | Apply sysctl settings for inference workload"
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/99-ollama-perf.conf
+        reload: true
+        state: present
+      loop:
+        # Disable auto-NUMA migration — fights explicit numactl --membind=1 by
+        # moving KV-cache pages mid-inference to a different NUMA node.
+        - { name: kernel.numa_balancing, value: "0" }
+        # Near-zero swappiness: prevents model weights being paged out under
+        # memory pressure (complements LimitMEMLOCK=infinity in the unit file).
+        - { name: vm.swappiness, value: "1" }
+        # Required for mlock to succeed without reservation failures.
+        - { name: vm.overcommit_memory, value: "1" }
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Set Transparent Huge Pages to madvise (immediate)"
+      ansible.builtin.shell:
+        cmd: echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
+      changed_when: true
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Install THP madvise persistence service"
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/thp-madvise.service
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=Set Transparent Huge Pages to madvise
+          After=local-fs.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c 'echo madvise > /sys/kernel/mm/transparent_hugepage/enabled'
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd daemon
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Enable THP madvise persistence service"
+      ansible.builtin.systemd:
+        name: thp-madvise.service
+        enabled: true
+        daemon_reload: false
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Set CPU governor to performance (immediate)"
+      ansible.builtin.shell:
+        cmd: |
+          for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            [ -f "$gov" ] && echo performance > "$gov"
+          done
+      changed_when: true
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Install CPU performance governor persistence service"
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cpu-performance.service
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=Set CPU scaling governor to performance
+          After=local-fs.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/sh -c 'for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do [ -f "$gov" ] && echo performance > "$gov"; done'
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd daemon
+      tags:
+        - os-tune
+
+    - name: "OS Tune | Enable CPU performance governor persistence service"
+      ansible.builtin.systemd:
+        name: cpu-performance.service
+        enabled: true
+        daemon_reload: false
+      tags:
+        - os-tune
+
   handlers:
     - name: Reload systemd and restart ollama
       ansible.builtin.systemd:
         name: ollama
         state: restarted
+        daemon_reload: true
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
         daemon_reload: true

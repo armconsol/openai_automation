@@ -40,6 +40,33 @@
       tags:
         - openwebui-secrets
 
+    - name: "Open WebUI | Store Bedrock bearer token in Vault"
+      ansible.builtin.uri:
+        url: "{{ vault_url }}/v1/{{ vault_secret_prefix }}/bedrock"
+        method: POST
+        headers:
+          X-Vault-Token: "{{ lookup('ansible.builtin.file', vault_token_file) }}"
+        body_format: json
+        body:
+          data:
+            bearer_token: "{{ bedrock_bearer_token }}"
+        status_code: [200, 204]
+      when: bedrock_bearer_token is defined and bedrock_bearer_token | length > 0
+      tags:
+        - openwebui-secrets
+
+    - name: "Open WebUI | Retrieve Bedrock bearer token from Vault"
+      block:
+        - name: "Open WebUI | Fetch Bedrock bearer token"
+          ansible.builtin.set_fact:
+            _bedrock_token: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/bedrock:bearer_token token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
+      rescue:
+        - name: "Open WebUI | Bedrock not configured, skipping"
+          ansible.builtin.set_fact:
+            _bedrock_token: ""
+      tags:
+        - openwebui-secrets
+
     # ── Container deployment ─────────────────────────────────────────
     - name: "Open WebUI | Stop and remove existing container"
       community.docker.docker_container:
@@ -58,6 +85,44 @@
       tags:
         - openwebui-deploy
 
+    - name: "Open WebUI | Build container environment"
+      ansible.builtin.set_fact:
+        _openwebui_env: >-
+          {{
+            {
+              'OLLAMA_BASE_URL': 'http://host.docker.internal:11434',
+              'OLLAMA_API_KEY': ollama_api_key,
+              'WEBUI_SECRET_KEY': openwebui_secret_key,
+              'WEBUI_AUTH': 'true',
+              'ENABLE_OAUTH_SIGNUP': 'true',
+              'OAUTH_PROVIDER_NAME': platform_name,
+              'OAUTH_CLIENT_ID': 'open-webui',
+              'OAUTH_CLIENT_SECRET': keycloak_client_secret,
+              'OPENID_PROVIDER_URL': keycloak_oidc_url ~ '/.well-known/openid-configuration',
+              'OAUTH_SCOPES': 'openid email profile',
+              'ENABLE_OAUTH_ROLE_MANAGEMENT': 'true',
+              'OAUTH_ROLES_CLAIM': 'realm_access.roles',
+              'OAUTH_ALLOWED_ROLES': 'ai-user,ai-admin',
+              'OAUTH_ADMIN_ROLES': 'ai-admin',
+              'ENABLE_RAG_WEB_SEARCH': 'false',
+              'RAG_EMBEDDING_ENGINE': 'ollama',
+              'RAG_EMBEDDING_MODEL': 'nomic-embed-text',
+              'RAG_OLLAMA_BASE_URL': 'http://host.docker.internal:11434',
+              'VECTOR_DB': 'qdrant',
+              'QDRANT_URI': 'http://host.docker.internal:6333',
+              'ENABLE_ADMIN_EXPORT': 'true',
+              'DEFAULT_MODELS': 'llama-family',
+              'WEBUI_NAME': platform_name,
+            } | combine(
+              {
+                'OPENAI_API_BASE_URL': 'https://bedrock-runtime.' ~ bedrock_aws_region ~ '.amazonaws.com/v1',
+                'OPENAI_API_KEY': _bedrock_token,
+              } if _bedrock_token | default('') | length > 0 else {}
+            )
+          }}
+      tags:
+        - openwebui-deploy
+
     - name: "Open WebUI | Run Open WebUI container"
       community.docker.docker_container:
         name: "{{ openwebui_container_name }}"
@@ -70,30 +135,7 @@
           host.docker.internal: host-gateway
         volumes:
           - "{{ openwebui_data_dir }}:/app/backend/data"
-        env:
-          OLLAMA_BASE_URL: "http://host.docker.internal:11434"
-          OLLAMA_API_KEY: "{{ ollama_api_key }}"
-          WEBUI_SECRET_KEY: "{{ openwebui_secret_key }}"
-          WEBUI_AUTH: "true"
-          ENABLE_OAUTH_SIGNUP: "true"
-          OAUTH_PROVIDER_NAME: "{{ platform_name }}"
-          OAUTH_CLIENT_ID: "open-webui"
-          OAUTH_CLIENT_SECRET: "{{ keycloak_client_secret }}"
-          OPENID_PROVIDER_URL: "{{ keycloak_oidc_url }}/.well-known/openid-configuration"
-          OAUTH_SCOPES: "openid email profile"
-          ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
-          OAUTH_ROLES_CLAIM: "realm_access.roles"
-          OAUTH_ALLOWED_ROLES: "ai-user,ai-admin"
-          OAUTH_ADMIN_ROLES: "ai-admin"
-          ENABLE_RAG_WEB_SEARCH: "false"
-          RAG_EMBEDDING_ENGINE: "ollama"
-          RAG_EMBEDDING_MODEL: "nomic-embed-text"
-          RAG_OLLAMA_BASE_URL: "http://host.docker.internal:11434"
-          VECTOR_DB: "qdrant"
-          QDRANT_URI: "http://host.docker.internal:6333"
-          ENABLE_ADMIN_EXPORT: "true"
-          DEFAULT_MODELS: "llama-family"
-          WEBUI_NAME: "{{ platform_name }}"
+        env: "{{ _openwebui_env }}"
       tags:
         - openwebui-deploy
 

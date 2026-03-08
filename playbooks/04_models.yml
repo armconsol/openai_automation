@@ -84,11 +84,9 @@
       tags:
         - models-pull
 
-    - name: "Models | Pull fixed models if not already present"
+    - name: "Models | Pull baseline models if not already present"
       ansible.builtin.command: "ollama pull {{ item }}"
-      loop:
-        - "llama3.2:3b"
-        - "gemma3:12b-it-q4_K_M"
+      loop: "{{ baseline_models }}"
       when: item not in installed_model_names
       changed_when: true
       loop_control:
@@ -111,7 +109,7 @@
       ansible.builtin.copy:
         content: |
           FROM {{ model_selection.slot3_coding }}
-          PARAMETER num_ctx 131072
+          PARAMETER num_ctx 32768
           SYSTEM You are an expert coding assistant. You write clean, efficient, well-documented code. Always include type hints and follow best practices.
         dest: "{{ modelfiles_dir }}/Modelfile.coder-128k"
         mode: "0644"
@@ -146,8 +144,8 @@
     - name: "Models | Template gemma-family Modelfile"
       ansible.builtin.copy:
         content: |
-          FROM gemma3:12b-it-q4_K_M
-          PARAMETER num_ctx 32768
+          FROM llama3.1:8b
+          PARAMETER num_ctx 8192
           SYSTEM You are a helpful, friendly family assistant. Provide safe, age-appropriate responses suitable for all family members.
         dest: "{{ modelfiles_dir }}/Modelfile.gemma-family"
         mode: "0644"
