@@ -204,6 +204,100 @@ from the platform realm (not the `master` realm):
 | `ai-admin` | ✅ Admin access        | ✅ Full access |
 | *(none)*   | ❌ Blocked             | ❌ Blocked  |
 
+## Connecting Coding Agents
+
+The platform exposes two API endpoints for coding tools (aider, Continue.dev, Cursor, etc.).
+**Users should connect via Open WebUI** — it enforces Keycloak authentication and issues
+per-user API keys. Direct Ollama access is for service accounts and admin use only.
+
+### Option A — Via Open WebUI (recommended for users)
+
+Each user authenticates through Keycloak and has their own API key. Open WebUI exposes an
+OpenAI-compatible API that all major coding agent tools support.
+
+**Step 1 — Generate your personal API key:**
+
+1. Browse to `https://ollama-ui.<domain>` and log in via SSO
+2. Click your avatar (top-right) → **Settings** → **Account**
+3. Scroll to **API Keys** → **Create new secret key**
+4. Copy the key — it is only shown once
+
+**Step 2 — Configure your coding tool:**
+
+| Setting   | Value                                  |
+|-----------|----------------------------------------|
+| Base URL  | `https://ollama-ui.<domain>/api`       |
+| API key   | your personal Open WebUI key           |
+| Model     | any model name shown in the WebUI      |
+
+**Aider:**
+```bash
+aider --openai-api-base https://ollama-ui.<domain>/api \
+      --openai-api-key  <your-openwebui-key> \
+      --model           deepseek-coder-v2:latest
+```
+
+**Continue.dev** (`~/.continue/config.json`):
+```json
+{
+  "models": [
+    {
+      "title": "AI Platform",
+      "provider": "openai",
+      "model": "deepseek-coder-v2:latest",
+      "apiBase": "https://ollama-ui.<domain>/api",
+      "apiKey": "<your-openwebui-key>"
+    }
+  ]
+}
+```
+
+**Cursor / VS Code** — add a custom OpenAI-compatible provider pointing to
+`https://ollama-ui.<domain>/api` with your personal key.
+
+---
+
+### Option B — Direct Ollama API (admin / service accounts only)
+
+The Ollama API endpoint is protected by a single shared key stored in Vault. It is
+intended for internal service-to-service calls and admin use — not for individual users.
+
+**Retrieve the Ollama API key from Vault:**
+```bash
+vault kv get -field=api_key secret/<vault_project_slug>/ollama
+```
+
+| Setting   | Value                                  |
+|-----------|----------------------------------------|
+| Base URL  | `https://ollama-api.<domain>/v1`       |
+| API key   | Ollama API key from Vault              |
+| Model     | any installed Ollama model name        |
+
+**Aider:**
+```bash
+aider --openai-api-base https://ollama-api.<domain>/v1 \
+      --openai-api-key  <ollama-api-key> \
+      --model           deepseek-coder-v2:latest
+```
+
+> **Note:** Direct Ollama access bypasses Keycloak auth and usage tracking.
+> Rotate the key via `vault kv delete secret/<vault_project_slug>/ollama` and
+> re-run `playbooks/02_infrastructure.yml`.
+
+---
+
+### Recommended models for coding
+
+The benchmark playbook automatically selects the best coding models and keeps them warm.
+Check the current slot assignments in `benchmarks/results/model_selection.json`:
+
+```bash
+cat benchmarks/results/model_selection.json | python3 -m json.tool | grep slot
+```
+
+Slots 3 and 4 are always coding-classified models. Use the `slot3_coding` model for
+primary work and `slot4_coding` for a lighter/faster alternative.
+
 ## Day-2 Operations
 
 **Full deploy / idempotent re-run:**
