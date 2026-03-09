@@ -1,39 +1,92 @@
 {
     "all_metrics": {
-        "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b": {
-            "avg_tok_per_sec": 0.0,
-            "category": "coding",
-            "coding_composite": 0.0,
-            "coding_quality": 0,
-            "general_composite": 0.0,
-            "general_quality": 0,
+        "llama3.2:3b": {
+            "avg_tok_per_sec": 0.1,
+            "category": "general",
+            "coding_composite": 0.413,
+            "coding_quality": 0.917,
+            "general_composite": 0.45,
+            "general_quality": 1.0,
             "latency_ms": 9999,
             "latency_score": 0,
-            "toks_norm": 0.0
+            "toks_norm": 0.002
+        },
+        "mistral-nemo:latest": {
+            "avg_tok_per_sec": 0.1,
+            "category": "general",
+            "coding_composite": 0.383,
+            "coding_quality": 0.85,
+            "general_composite": 0.45,
+            "general_quality": 1.0,
+            "latency_ms": 9999,
+            "latency_score": 0,
+            "toks_norm": 0.001
+        },
+        "qwen2.5-coder:7b": {
+            "avg_tok_per_sec": 0.1,
+            "category": "coding",
+            "coding_composite": 0.371,
+            "coding_quality": 0.823,
+            "general_composite": 0.383,
+            "general_quality": 0.85,
+            "latency_ms": 9999,
+            "latency_score": 0,
+            "toks_norm": 0.001
         }
     },
     "coding_ranking": [
         {
-            "composite": 0.0,
+            "composite": 0.371,
             "metrics": {
-                "avg_tok_per_sec": 0.0,
+                "avg_tok_per_sec": 0.1,
                 "category": "coding",
-                "coding_composite": 0.0,
-                "coding_quality": 0,
-                "general_composite": 0.0,
-                "general_quality": 0,
+                "coding_composite": 0.371,
+                "coding_quality": 0.823,
+                "general_composite": 0.383,
+                "general_quality": 0.85,
                 "latency_ms": 9999,
                 "latency_score": 0,
-                "toks_norm": 0.0
+                "toks_norm": 0.001
             },
-            "name": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b"
+            "name": "qwen2.5-coder:7b"
         }
     ],
-    "general_ranking": [],
-    "slot1_general": "none",
-    "slot2_general": "none",
-    "slot3_coding": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b",
-    "slot4_coding": "mistral-nemo:latest:mistral:latest:llama3.1:8b:qwen2.5-coder:7b:gemma3:12b-it-q4_K_M:llama3.2:3b",
+    "general_ranking": [
+        {
+            "composite": 0.45,
+            "metrics": {
+                "avg_tok_per_sec": 0.1,
+                "category": "general",
+                "coding_composite": 0.413,
+                "coding_quality": 0.917,
+                "general_composite": 0.45,
+                "general_quality": 1.0,
+                "latency_ms": 9999,
+                "latency_score": 0,
+                "toks_norm": 0.002
+            },
+            "name": "llama3.2:3b"
+        },
+        {
+            "composite": 0.45,
+            "metrics": {
+                "avg_tok_per_sec": 0.1,
+                "category": "general",
+                "coding_composite": 0.383,
+                "coding_quality": 0.85,
+                "general_composite": 0.45,
+                "general_quality": 1.0,
+                "latency_ms": 9999,
+                "latency_score": 0,
+                "toks_norm": 0.001
+            },
+            "name": "mistral-nemo:latest"
+        }
+    ],
+    "slot1_general": "llama3.2:3b",
+    "slot2_general": "mistral-nemo:latest",
+    "slot3_coding": "qwen2.5-coder:7b",
+    "slot4_coding": "qwen2.5-coder:7b",
     "slot5_general_rotate": "none",
     "slot6_coding_rotate": "none"
 }

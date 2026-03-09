@@ -95,8 +95,8 @@
 
 - name: "Benchmark | Identify loaded models in batch"
   ansible.builtin.set_fact:
-    _eligible_node1: "{{ _load_node1.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
-    _eligible_node0: "{{ _load_node0.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
+    _eligible_node1: "{{ _load_node1.results | selectattr('status', 'equalto', 200) | map(attribute='_async_job') | map(attribute='item') | list }}"
+    _eligible_node0: "{{ _load_node0.results | selectattr('status', 'equalto', 200) | map(attribute='_async_job') | map(attribute='item') | list }}"
 
 # ── Fire benchmark prompts at both nodes concurrently ─────────────────────────
 # uri timeout = large_timeout × 15 (18 000 s) covers the full queue-drain
@@ -174,11 +174,20 @@
 
 # ── Accumulate results into play-scoped facts ─────────────────────────────────
 
-- name: "Benchmark | Accumulate batch results"
+- name: "Benchmark | Accumulate node1 results"
   ansible.builtin.set_fact:
-    bench_all_results: >-
-      {{ bench_all_results
-         + (_bench_node1.results | default([]))
-         + (_bench_node0.results | default([])) }}
-    all_eligible_models: >-
-      {{ all_eligible_models + _eligible_node1 + _eligible_node0 }}
+    bench_all_results: "{{ bench_all_results + [item | combine({'item': item._async_job.item | default([])})] }}"
+  loop: "{{ _bench_node1.results | default([]) }}"
+  loop_control:
+    label: "{{ (item._async_job.item | default(['?', '?']))[0] }} / {{ (item._async_job.item | default(['?', '?']))[1] }}"
+
+- name: "Benchmark | Accumulate node0 results"
+  ansible.builtin.set_fact:
+    bench_all_results: "{{ bench_all_results + [item | combine({'item': item._async_job.item | default([])})] }}"
+  loop: "{{ _bench_node0.results | default([]) }}"
+  loop_control:
+    label: "{{ (item._async_job.item | default(['?', '?']))[0] }} / {{ (item._async_job.item | default(['?', '?']))[1] }}"
+
+- name: "Benchmark | Accumulate eligible models"
+  ansible.builtin.set_fact:
+    all_eligible_models: "{{ all_eligible_models + _eligible_node1 + _eligible_node0 }}"

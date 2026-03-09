@@ -230,11 +230,12 @@
     - name: "Benchmark | Process batch {{ _loop_idx + 1 }} of {{ models_to_benchmark | batch(6) | list | length }}"
       ansible.builtin.include_tasks: _bench_tier_batch.yml
       vars:
-        _batch_node1: "{{ item[:3] }}"
-        _batch_node0: "{{ item[3:] }}"
+        _batch_node1: "{{ _batch[:3] }}"
+        _batch_node0: "{{ _batch[3:] }}"
       loop: "{{ models_to_benchmark | batch(6) | list }}"
       loop_control:
-        label: "batch {{ _loop_idx + 1 }}: node1={{ item[:3] }} node0={{ item[3:] }}"
+        loop_var: _batch
+        label: "batch {{ _loop_idx + 1 }}: node1={{ _batch[:3] }} node0={{ _batch[3:] }}"
         index_var: _loop_idx
       tags:
         - benchmark-run
