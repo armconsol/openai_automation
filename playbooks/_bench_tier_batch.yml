@@ -10,18 +10,20 @@
 #   bench_all_results    — list of uri result dicts
 #   all_eligible_models  — list of model names that passed load
 #
-# Concurrency design:
-#   Loads are sequential (disk I/O: node1 then node0).
-#   Benchmarks are concurrent: all node1 prompts are fired into Ollama's
-#   queue (async, poll:0), then all node0 prompts are fired immediately
-#   after. Both nodes drain their queues simultaneously.
-#   OLLAMA_SCHED_SPREAD=false (default) ensures each node processes its
-#   models one at a time in queue order, so scores are not cross-model
-#   contaminated. uri timeout accounts for full queue-drain wait time.
+# Concurrency design (load and benchmark phases both use async):
+#   Load:      node1 and node0 warm-up "Hi" prompts fire simultaneously.
+#              Within each node Ollama still loads one model at a time,
+#              but both nodes drain their queues in parallel.
+#   Benchmark: same pattern — both nodes' prompt queues drain together.
+#   uri timeout covers the full queue-drain wait (see inline comments).
+#   loop_var: _async_job on collect tasks preserves the uri module's
+#   item=[model, ...] field so downstream tasks need no structural changes.
 
-# ── Load models into RAM ──────────────────────────────────────────────────────
+# ── Load models into RAM (both nodes concurrently) ────────────────────────────
+# 3 models per node, sequential within each node → last model waits for 2
+# ahead: max load wait ≤ 2 × load_timeout. Use load_timeout × 4 for margin.
 
-- name: "Benchmark | Load node1 models into RAM"
+- name: "Benchmark | Load node1 models into RAM (async)"
   ansible.builtin.uri:
     url: "http://localhost:11434/api/generate"
     method: POST
@@ -32,16 +34,17 @@
       stream: false
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
-    timeout: "{{ benchmark_load_timeout }}"
+    timeout: "{{ (benchmark_load_timeout | int) * 4 }}"
     status_code: 200
   loop: "{{ _batch_node1 }}"
   loop_control:
-    loop_var: item
     label: "node1 load: {{ item }}"
-  register: _load_node1
+  async: "{{ (benchmark_load_timeout | int) * 5 }}"
+  poll: 0
+  register: _load_node1_jobs
   failed_when: false
 
-- name: "Benchmark | Load node0 models into RAM"
+- name: "Benchmark | Load node0 models into RAM (async)"
   ansible.builtin.uri:
     url: "http://localhost:{{ ollama_node0_port }}/api/generate"
     method: POST
@@ -52,13 +55,40 @@
       stream: false
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
-    timeout: "{{ benchmark_load_timeout }}"
+    timeout: "{{ (benchmark_load_timeout | int) * 4 }}"
     status_code: 200
   loop: "{{ _batch_node0 }}"
   loop_control:
-    loop_var: item
     label: "node0 load: {{ item }}"
+  async: "{{ (benchmark_load_timeout | int) * 5 }}"
+  poll: 0
+  register: _load_node0_jobs
+  failed_when: false
+
+- name: "Benchmark | Collect node1 load results"
+  ansible.builtin.async_status:
+    jid: "{{ _async_job.ansible_job_id }}"
+  loop: "{{ _load_node1_jobs.results | default([]) }}"
+  loop_control:
+    loop_var: _async_job
+    label: "node1 load: {{ _async_job.item | default('?') }}"
+  register: _load_node1
+  until: _load_node1.finished
+  retries: "{{ ((benchmark_load_timeout | int) * 5 / 15) | int + 5 }}"
+  delay: 15
+  failed_when: false
+
+- name: "Benchmark | Collect node0 load results"
+  ansible.builtin.async_status:
+    jid: "{{ _async_job.ansible_job_id }}"
+  loop: "{{ _load_node0_jobs.results | default([]) }}"
+  loop_control:
+    loop_var: _async_job
+    label: "node0 load: {{ _async_job.item | default('?') }}"
   register: _load_node0
+  until: _load_node0.finished
+  retries: "{{ ((benchmark_load_timeout | int) * 5 / 15) | int + 5 }}"
+  delay: 15
   failed_when: false
 
 # ── Identify successfully loaded models ───────────────────────────────────────
@@ -69,11 +99,10 @@
     _eligible_node0: "{{ _load_node0.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
 
 # ── Fire benchmark prompts at both nodes concurrently ─────────────────────────
-# uri timeout = large_timeout × 15 covers the full queue-drain wait:
-#   worst case 3 models × 7 prompts = 21 requests, 2 parallel →
-#   last request waits ≤ 10 × large_timeout = 12 000 s < 18 000 s (15×).
-# async timeout must exceed uri timeout; use 18× for headroom.
-# Collect retries × delay must exceed async timeout: 730 × 30 = 21 900 s.
+# uri timeout = large_timeout × 15 (18 000 s) covers the full queue-drain
+# wait: worst case 21 queued requests, 2 parallel, 1 200 s each →
+# max queue wait ≈ 12 000 s < 18 000 s. async = ×18, collect retries
+# 730 × 30 s = 21 900 s of headroom.
 
 - name: "Benchmark | Fire test prompts at node1 (async)"
   ansible.builtin.uri:
@@ -116,12 +145,6 @@
   poll: 0
   register: _bench_node0_jobs
   failed_when: false
-
-# ── Collect results (both queues are draining in parallel during these tasks) ──
-# loop_var: _async_job prevents Ansible from overwriting the `item` field in
-# each collected result. The uri module stores item=[model, prompt] in the
-# async job file; async_status surfaces it directly so the compute task can
-# use result.item[0] / result.item[1] without any structural changes.
 
 - name: "Benchmark | Collect node1 results"
   ansible.builtin.async_status:
