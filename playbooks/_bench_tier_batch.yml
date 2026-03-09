@@ -1,0 +1,109 @@
+---
+# playbooks/_bench_tier_batch.yml
+# Included by 03_benchmark.yml once per batch of up to 6 models.
+#
+# Expected vars (passed via include_tasks vars:):
+#   _batch_node1  — list of 0–3 model names for port 11434
+#   _batch_node0  — list of 0–3 model names for port 11435
+#
+# Mutates host facts (accumulated across batches):
+#   bench_all_results    — list of uri result dicts
+#   all_eligible_models  — list of model names that passed load
+
+# ── Load models into RAM ──────────────────────────────────────────────────────
+
+- name: "Benchmark | Load node1 models into RAM"
+  ansible.builtin.uri:
+    url: "http://localhost:11434/api/generate"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ item }}"
+      prompt: "Hi"
+      stream: false
+    headers:
+      Authorization: "Bearer {{ ollama_api_key }}"
+    timeout: "{{ benchmark_load_timeout }}"
+    status_code: 200
+  loop: "{{ _batch_node1 }}"
+  loop_control:
+    label: "node1 load: {{ item }}"
+  register: _load_node1
+  failed_when: false
+
+- name: "Benchmark | Load node0 models into RAM"
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ollama_node0_port }}/api/generate"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ item }}"
+      prompt: "Hi"
+      stream: false
+    headers:
+      Authorization: "Bearer {{ ollama_api_key }}"
+    timeout: "{{ benchmark_load_timeout }}"
+    status_code: 200
+  loop: "{{ _batch_node0 }}"
+  loop_control:
+    label: "node0 load: {{ item }}"
+  register: _load_node0
+  failed_when: false
+
+# ── Identify successfully loaded models ───────────────────────────────────────
+
+- name: "Benchmark | Identify loaded models in batch"
+  ansible.builtin.set_fact:
+    _eligible_node1: "{{ _load_node1.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
+    _eligible_node0: "{{ _load_node0.results | selectattr('status', 'equalto', 200) | map(attribute='item') | list }}"
+
+# ── Benchmark loaded models ───────────────────────────────────────────────────
+
+- name: "Benchmark | Run test prompts against node1 models"
+  ansible.builtin.uri:
+    url: "http://localhost:11434/api/generate"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ item.0 }}"
+      prompt: "{{ test_prompts[item.1].prompt }}"
+      stream: false
+    headers:
+      Authorization: "Bearer {{ ollama_api_key }}"
+    timeout: "{{ _benchmark_timeout_map[item.0] | default(benchmark_large_timeout) }}"
+    status_code: 200
+  loop: "{{ _eligible_node1 | product(test_prompts.keys() | list) | list }}"
+  loop_control:
+    label: "{{ item.0 }} / {{ item.1 }}"
+  register: _bench_node1
+  failed_when: false
+
+- name: "Benchmark | Run test prompts against node0 models"
+  ansible.builtin.uri:
+    url: "http://localhost:{{ ollama_node0_port }}/api/generate"
+    method: POST
+    body_format: json
+    body:
+      model: "{{ item.0 }}"
+      prompt: "{{ test_prompts[item.1].prompt }}"
+      stream: false
+    headers:
+      Authorization: "Bearer {{ ollama_api_key }}"
+    timeout: "{{ _benchmark_timeout_map[item.0] | default(benchmark_large_timeout) }}"
+    status_code: 200
+  loop: "{{ _eligible_node0 | product(test_prompts.keys() | list) | list }}"
+  loop_control:
+    label: "{{ item.0 }} / {{ item.1 }}"
+  register: _bench_node0
+  failed_when: false
+
+# ── Accumulate results into play-scoped facts ─────────────────────────────────
+
+- name: "Benchmark | Accumulate batch results"
+  ansible.builtin.set_fact:
+    bench_all_results: >-
+      {{ bench_all_results
+         + (_bench_node1.results | default([]))
+         + (_bench_node0.results | default([])) }}
+    all_eligible_models: >-
+      {{ all_eligible_models + _eligible_node1 + _eligible_node0 }}

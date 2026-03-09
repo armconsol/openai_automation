@@ -103,9 +103,10 @@ benchmark_skip_aliases:
 benchmark_small_max_gb: 10    # upper size boundary for small pass (< 10 GB), based on runtime RAM
 benchmark_medium_max_gb: 15   # upper size boundary for medium pass (10–15 GB), based on runtime RAM
 benchmark_size_overhead_factor: 1.2  # ollama list shows disk size; multiply by this to estimate runtime RAM
-benchmark_small_timeout: 300  # seconds per request, small models
-benchmark_medium_timeout: 900 # seconds per request, medium models (15 min)
-benchmark_large_timeout: 1200 # seconds per request, large models (20 min)
+benchmark_load_timeout: 300      # seconds — warm-up "Hi" prompt per model before benchmarking
+benchmark_small_timeout: 300     # seconds per request, small models
+benchmark_medium_timeout: 900    # seconds per request, medium models (15 min)
+benchmark_large_timeout: 1200    # seconds per request, large models (20 min)
 
 # Explicit category overrides applied before heuristics. Keys are model names as
 # returned by `ollama list`. Valid values: 'coding' or 'general'.

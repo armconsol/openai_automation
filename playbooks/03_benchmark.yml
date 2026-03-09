@@ -84,6 +84,31 @@
       tags:
         - benchmark-discover
 
+    - name: "Benchmark | Stop warmup services for clean benchmark run"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - ollama-warmup.service
+        - ollama-warmup-node0.service
+      failed_when: false
+      become: true
+      tags:
+        - benchmark-setup
+
+    - name: "Benchmark | Wait for node0 Ollama API to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ ollama_node0_port }}/api/tags"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: ollama_node0_ready
+      retries: 24
+      delay: 5
+      until: ollama_node0_ready.status == 200
+      tags:
+        - benchmark-setup
+
     - name: "Benchmark | Discover installed models"
       ansible.builtin.command: ollama list
       changed_when: false
@@ -153,87 +178,70 @@
       tags:
         - benchmark-discover
 
+    - name: "Benchmark | Initialize batch accumulator facts"
+      ansible.builtin.set_fact:
+        bench_all_results: []
+        all_eligible_models: []
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Build per-model benchmark timeout map"
+      ansible.builtin.set_fact:
+        _benchmark_timeout_map_json: |
+          {% set ns = namespace(d={}) %}
+          {% for m in models_to_benchmark %}
+          {%   if m in _small_models %}
+          {%     set _ = ns.d.update({m: benchmark_small_timeout | int}) %}
+          {%   elif m in _medium_models %}
+          {%     set _ = ns.d.update({m: benchmark_medium_timeout | int}) %}
+          {%   else %}
+          {%     set _ = ns.d.update({m: benchmark_large_timeout | int}) %}
+          {%   endif %}
+          {% endfor %}
+          {{ ns.d | to_json }}
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Parse benchmark timeout map"
+      ansible.builtin.set_fact:
+        _benchmark_timeout_map: "{{ _benchmark_timeout_map_json | from_json }}"
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Sort models largest-first so heaviest models land on node1 (120 GB)"
+      ansible.builtin.set_fact:
+        models_to_benchmark: >-
+          {{ (_large_models + _medium_models + _small_models)
+             | select('in', models_to_benchmark) | list }}
+      tags:
+        - benchmark-discover
+
     - name: "Benchmark | Display models to benchmark"
       ansible.builtin.debug:
         msg:
           - "Small  pass (timeout {{ benchmark_small_timeout }}s,  ≤{{ benchmark_small_max_gb }}GB):  {{ _small_models }}"
           - "Medium pass (timeout {{ benchmark_medium_timeout }}s, {{ benchmark_small_max_gb }}–{{ benchmark_medium_max_gb }}GB): {{ _medium_models }}"
           - "Large  pass (timeout {{ benchmark_large_timeout }}s, >{{ benchmark_medium_max_gb }}GB): {{ _large_models }}"
+          - "Load timeout (warm-up 'Hi' prompt): {{ benchmark_load_timeout }}s"
+          - "Total: {{ models_to_benchmark | length }} models, {{ (models_to_benchmark | batch(6) | list) | length }} batch(es) of ≤6"
       tags:
         - benchmark-discover
 
-    - name: "Benchmark | Run test prompts against small models"
-      ansible.builtin.uri:
-        url: "{{ ollama_api_url }}/api/generate"
-        method: POST
-        body_format: json
-        body:
-          model: "{{ item.0 }}"
-          prompt: "{{ test_prompts[item.1].prompt }}"
-          stream: false
-        headers:
-          Authorization: "Bearer {{ ollama_api_key }}"
-        timeout: "{{ benchmark_small_timeout }}"
-        status_code: 200
-      loop: "{{ _small_models | product(test_prompts.keys() | list) | list }}"
+    - name: "Benchmark | Process batch {{ _loop_idx + 1 }} of {{ models_to_benchmark | batch(6) | list | length }}"
+      ansible.builtin.include_tasks: _bench_tier_batch.yml
+      vars:
+        _batch_node1: "{{ item[:3] }}"
+        _batch_node0: "{{ item[3:] }}"
+      loop: "{{ models_to_benchmark | batch(6) | list }}"
       loop_control:
-        label: "{{ item.0 }} / {{ item.1 }}"
-      register: _bench_small
-      failed_when: false
+        label: "batch {{ _loop_idx + 1 }}: node1={{ item[:3] }} node0={{ item[3:] }}"
+        index_var: _loop_idx
       tags:
         - benchmark-run
 
-    - name: "Benchmark | Run test prompts against medium models"
-      ansible.builtin.uri:
-        url: "{{ ollama_api_url }}/api/generate"
-        method: POST
-        body_format: json
-        body:
-          model: "{{ item.0 }}"
-          prompt: "{{ test_prompts[item.1].prompt }}"
-          stream: false
-        headers:
-          Authorization: "Bearer {{ ollama_api_key }}"
-        timeout: "{{ benchmark_medium_timeout }}"
-        status_code: 200
-      loop: "{{ _medium_models | product(test_prompts.keys() | list) | list }}"
-      loop_control:
-        label: "{{ item.0 }} / {{ item.1 }}"
-      register: _bench_medium
-      failed_when: false
-      when: _medium_models | length > 0
-      tags:
-        - benchmark-run
-
-    - name: "Benchmark | Run test prompts against large models"
-      ansible.builtin.uri:
-        url: "{{ ollama_api_url }}/api/generate"
-        method: POST
-        body_format: json
-        body:
-          model: "{{ item.0 }}"
-          prompt: "{{ test_prompts[item.1].prompt }}"
-          stream: false
-        headers:
-          Authorization: "Bearer {{ ollama_api_key }}"
-        timeout: "{{ benchmark_large_timeout }}"
-        status_code: 200
-      loop: "{{ _large_models | product(test_prompts.keys() | list) | list }}"
-      loop_control:
-        label: "{{ item.0 }} / {{ item.1 }}"
-      register: _bench_large
-      failed_when: false
-      when: _large_models | length > 0
-      tags:
-        - benchmark-run
-
-    - name: "Benchmark | Merge small, medium, and large model results"
-      ansible.builtin.set_fact:
-        benchmark_raw_results:
-          results: >-
-            {{ (_bench_small.results  | default([]))
-             + (_bench_medium.results | default([]))
-             + (_bench_large.results  | default([])) }}
+    - name: "Benchmark | Display models that failed to load"
+      ansible.builtin.debug:
+        msg: "Load failures (excluded from scoring): {{ models_to_benchmark | reject('in', all_eligible_models) | list }}"
       tags:
         - benchmark-run
 
@@ -241,9 +249,9 @@
       ansible.builtin.set_fact:
         model_metrics: |
           {% set ns = namespace(results={}) %}
-          {% for model in models_to_benchmark %}
+          {% for model in all_eligible_models %}
           {%   set ns2 = namespace(coding_quality=0, coding_count=0, general_quality=0, general_count=0, total_toks=0, total_eval_time=0, ttft_sum=0, ttft_count=0, latency_ns=0) %}
-          {%   for result in benchmark_raw_results.results %}
+          {%   for result in bench_all_results %}
           {%     if result.item[0] == model and result.status == 200 %}
           {%       set test_name = result.item[1] %}
           {%       set resp = result.json | default({}) %}
@@ -449,3 +457,15 @@
       changed_when: true
       tags:
         - benchmark-pull
+
+    - name: "Benchmark | Restart warmup services after benchmark"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - ollama-warmup.service
+        - ollama-warmup-node0.service
+      failed_when: false
+      become: true
+      tags:
+        - benchmark-cleanup
