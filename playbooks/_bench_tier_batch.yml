@@ -10,14 +10,13 @@
 #   bench_all_results    — list of uri result dicts
 #   all_eligible_models  — list of model names that passed load
 #
-# Concurrency design (load and benchmark phases both use async):
-#   Load:      node1 and node0 warm-up "Hi" prompts fire simultaneously.
+# Concurrency design:
+#   Load:      node1 and node0 warm-up "Hi" prompts fire simultaneously (async).
 #              Within each node Ollama still loads one model at a time,
 #              but both nodes drain their queues in parallel.
-#   Benchmark: same pattern — both nodes' prompt queues drain together.
-#   uri timeout covers the full queue-drain wait (see inline comments).
-#   loop_var: _async_job on collect tasks preserves the uri module's
-#   item=[model, ...] field so downstream tasks need no structural changes.
+#   Benchmark: sequential (synchronous uri), one request at a time per node.
+#              Node1 drains fully, then node0. No queue contamination; each
+#              request gets a full idle inference slot and clean eval_duration.
 
 # ── Load models into RAM (both nodes concurrently) ────────────────────────────
 # 3 models per node, sequential within each node → last model waits for 2
@@ -98,13 +97,12 @@
     _eligible_node1: "{{ _load_node1.results | selectattr('status', 'equalto', 200) | map(attribute='_async_job') | map(attribute='item') | list }}"
     _eligible_node0: "{{ _load_node0.results | selectattr('status', 'equalto', 200) | map(attribute='_async_job') | map(attribute='item') | list }}"
 
-# ── Fire benchmark prompts at both nodes concurrently ─────────────────────────
-# uri timeout = large_timeout × 15 (18 000 s) covers the full queue-drain
-# wait: worst case 21 queued requests, 2 parallel, 1 200 s each →
-# max queue wait ≈ 12 000 s < 18 000 s. async = ×18, collect retries
-# 730 × 30 s = 21 900 s of headroom.
+# ── Fire benchmark prompts sequentially (one request at a time per node) ──────
+# Sequential firing ensures each request hits an idle Ollama inference slot:
+# no queue contamination, full CPU budget per request, clean eval_duration.
+# Node1 then node0 run back-to-back; concurrent load phase above is unchanged.
 
-- name: "Benchmark | Fire test prompts at node1 (async)"
+- name: "Benchmark | Fire test prompts at node1"
   ansible.builtin.uri:
     url: "http://localhost:11434/api/generate"
     method: POST
@@ -115,17 +113,15 @@
       stream: false
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
-    timeout: "{{ (benchmark_large_timeout | int) * 15 }}"
+    timeout: "{{ (benchmark_large_timeout | int) }}"
     status_code: 200
   loop: "{{ _eligible_node1 | product(test_prompts.keys() | list) | list }}"
   loop_control:
     label: "{{ item.0 }} / {{ item.1 }}"
-  async: "{{ (benchmark_large_timeout | int) * 18 }}"
-  poll: 0
-  register: _bench_node1_jobs
+  register: _bench_node1
   failed_when: false
 
-- name: "Benchmark | Fire test prompts at node0 (async)"
+- name: "Benchmark | Fire test prompts at node0"
   ansible.builtin.uri:
     url: "http://localhost:{{ ollama_node0_port }}/api/generate"
     method: POST
@@ -136,57 +132,31 @@
       stream: false
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
-    timeout: "{{ (benchmark_large_timeout | int) * 15 }}"
+    timeout: "{{ (benchmark_large_timeout | int) }}"
     status_code: 200
   loop: "{{ _eligible_node0 | product(test_prompts.keys() | list) | list }}"
   loop_control:
     label: "{{ item.0 }} / {{ item.1 }}"
-  async: "{{ (benchmark_large_timeout | int) * 18 }}"
-  poll: 0
-  register: _bench_node0_jobs
-  failed_when: false
-
-- name: "Benchmark | Collect node1 results"
-  ansible.builtin.async_status:
-    jid: "{{ _async_job.ansible_job_id }}"
-  loop: "{{ _bench_node1_jobs.results | default([]) }}"
-  loop_control:
-    loop_var: _async_job
-    label: "{{ _async_job.item[0] | default('?') }} / {{ _async_job.item[1] | default('?') }}"
-  register: _bench_node1
-  until: _bench_node1.finished
-  retries: 730
-  delay: 30
-  failed_when: false
-
-- name: "Benchmark | Collect node0 results"
-  ansible.builtin.async_status:
-    jid: "{{ _async_job.ansible_job_id }}"
-  loop: "{{ _bench_node0_jobs.results | default([]) }}"
-  loop_control:
-    loop_var: _async_job
-    label: "{{ _async_job.item[0] | default('?') }} / {{ _async_job.item[1] | default('?') }}"
   register: _bench_node0
-  until: _bench_node0.finished
-  retries: 730
-  delay: 30
   failed_when: false
 
 # ── Accumulate results into play-scoped facts ─────────────────────────────────
+# Synchronous uri populates result.item = [model, prompt_key] at top level —
+# no _async_job indirection needed; compute task in 03_benchmark.yml unchanged.
 
 - name: "Benchmark | Accumulate node1 results"
   ansible.builtin.set_fact:
-    bench_all_results: "{{ bench_all_results + [item | combine({'item': item._async_job.item | default([])})] }}"
+    bench_all_results: "{{ bench_all_results + [item] }}"
   loop: "{{ _bench_node1.results | default([]) }}"
   loop_control:
-    label: "{{ (item._async_job.item | default(['?', '?']))[0] }} / {{ (item._async_job.item | default(['?', '?']))[1] }}"
+    label: "{{ (item.item | default(['?', '?']))[0] }} / {{ (item.item | default(['?', '?']))[1] }}"
 
 - name: "Benchmark | Accumulate node0 results"
   ansible.builtin.set_fact:
-    bench_all_results: "{{ bench_all_results + [item | combine({'item': item._async_job.item | default([])})] }}"
+    bench_all_results: "{{ bench_all_results + [item] }}"
   loop: "{{ _bench_node0.results | default([]) }}"
   loop_control:
-    label: "{{ (item._async_job.item | default(['?', '?']))[0] }} / {{ (item._async_job.item | default(['?', '?']))[1] }}"
+    label: "{{ (item.item | default(['?', '?']))[0] }} / {{ (item.item | default(['?', '?']))[1] }}"
 
 - name: "Benchmark | Accumulate eligible models"
   ansible.builtin.set_fact:

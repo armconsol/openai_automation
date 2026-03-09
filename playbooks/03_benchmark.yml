@@ -265,7 +265,7 @@
           {%       set ns2.ttft_sum = ns2.ttft_sum + prompt_eval_duration %}
           {%       set ns2.ttft_count = ns2.ttft_count + 1 %}
           {%       if test_name == 'latency' %}
-          {%         set ns2.latency_ns = eval_duration + prompt_eval_duration %}
+          {%         set ns2.latency_ns = resp.total_duration | default(0) | int %}
           {%       endif %}
           {%       set resp_len = response_text | length %}
           {%       if test_name in ['code_gen', 'debug', 'refactor'] %}
