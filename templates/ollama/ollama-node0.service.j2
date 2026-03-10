@@ -4,7 +4,7 @@ After=network-online.target ollama.service
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/bin/numactl --membind=0 {{ ollama_binary_path }} serve
+ExecStart=/usr/bin/numactl --cpunodebind=0 {{ ollama_binary_path }} serve
 Environment="OLLAMA_API_KEY={{ ollama_api_key }}"
 Environment="OLLAMA_HOST=0.0.0.0:{{ ollama_node0_port }}"
 Environment="OLLAMA_MODELS={{ ollama_models_path }}"

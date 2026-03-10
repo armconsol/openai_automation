@@ -200,8 +200,8 @@
         reload: true
         state: present
       loop:
-        # Disable auto-NUMA migration — fights explicit numactl --membind=1 by
-        # moving KV-cache pages mid-inference to a different NUMA node.
+        # Disable auto-NUMA migration — CPUAffinity pins Ollama to node 1/0
+        # physical cores; NUMA balancing could migrate pages mid-inference.
         - { name: kernel.numa_balancing, value: "0" }
         # Near-zero swappiness: prevents model weights being paged out under
         # memory pressure (complements LimitMEMLOCK=infinity in the unit file).
