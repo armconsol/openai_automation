@@ -111,6 +111,10 @@
       model: "{{ item.0 }}"
       prompt: "{{ test_prompts[item.1].prompt }}"
       stream: false
+      options:
+        num_predict: "{{ benchmark_num_predict | int }}"
+        temperature: 0
+        seed: 42
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
     timeout: "{{ (benchmark_large_timeout | int) }}"
@@ -130,6 +134,10 @@
       model: "{{ item.0 }}"
       prompt: "{{ test_prompts[item.1].prompt }}"
       stream: false
+      options:
+        num_predict: "{{ benchmark_num_predict | int }}"
+        temperature: 0
+        seed: 42
     headers:
       Authorization: "Bearer {{ ollama_api_key }}"
     timeout: "{{ (benchmark_large_timeout | int) }}"
