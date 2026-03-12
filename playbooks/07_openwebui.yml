@@ -90,7 +90,7 @@
         _openwebui_env: >-
           {{
             {
-              'OLLAMA_BASE_URL': 'http://host.docker.internal:11434',
+              'OLLAMA_BASE_URLS': 'http://host.docker.internal:11434;http://host.docker.internal:11435',
               'OLLAMA_API_KEY': ollama_api_key,
               'WEBUI_SECRET_KEY': openwebui_secret_key,
               'WEBUI_AUTH': 'true',

@@ -23,7 +23,7 @@ bot access -- all driven by a single `ansible-playbook deploy_ai.yml` command.
           ┌───────────────▼┐    ┌────▼──────────────────────┐
           │ coredns_host   │    │ ai_server                 │
           │ 192.168.1.29   │    │ 192.168.1.100             │
-          │                │    │                            │
+          │                │    │                           │
           │ - CoreDNS      │    │ - Ollama (LLM inference)  │
           └────────────────┘    │ - Open WebUI              │
                                 │ - Keycloak (SSO/OIDC)     │
@@ -292,11 +292,13 @@ The benchmark playbook automatically selects the best coding models and keeps th
 Check the current slot assignments in `benchmarks/results/model_selection.json`:
 
 ```bash
-cat benchmarks/results/model_selection.json | python3 -m json.tool | grep slot
+python3 -m json.tool benchmarks/results/model_selection.json | grep slot
 ```
 
-Slots 3 and 4 are always coding-classified models. Use the `slot3_coding` model for
-primary work and `slot4_coding` for a lighter/faster alternative.
+Slots 3–6 are coding-classified models, all running on the Node 0 instance at port 11435.
+Use `slot3_coding` (the highest-scoring coding model) as your primary model. Connect coding
+tools directly to `https://ollama-api.<domain>` (proxied from port 11434, Node 1) or to
+Open WebUI which load-balances across both instances.
 
 ## Day-2 Operations
 
@@ -343,6 +345,13 @@ ansible-playbook playbooks/03_benchmark.yml -K -e @local.yml \
   -e "benchmark_models=qwen2.5-coder:14b-instruct-q4_K_M,codestral:22b-v0.1-q4_K_M"
 ```
 
+**Override tier boundaries or timeouts (see [benchmarks/README.md](benchmarks/README.md#three-pass-execution)):**
+
+```bash
+ansible-playbook playbooks/03_benchmark.yml -K -e @local.yml \
+  -e "benchmark_small_max_gb=8 benchmark_medium_max_gb=20"
+```
+
 **Pull recommended models if scores are below threshold:**
 
 ```bash
@@ -355,10 +364,20 @@ ansible-playbook playbooks/03_benchmark.yml -K -e @local.yml -e "pull_if_better=
 ansible-playbook playbooks/04_models.yml -K -e @local.yml
 ```
 
-**Rotate slot 4 to a specific model:**
+**Rotate slot 5 (general) or slot 6 (coding) to a specific model:**
 
 ```bash
-ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot4_model=deepseek-r1:14b"
+# Swap general rotate slot
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot5_model=mistral:latest"
+
+# Swap coding rotate slot
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot6_model=llama3.1:70b"
+
+# Both at once
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot5_model=mistral:latest" -e "slot6_model=command-r:35b"
+
+# Reset both rotate slots back to benchmark recommendations
+ansible-playbook playbooks/04_models.yml -K -e @local.yml
 ```
 
 **Redeploy Keycloak only:**
@@ -393,16 +412,25 @@ ansible-playbook playbooks/11_vault_oidc.yml -K -e @local.yml
 
 ## Model Slot System
 
-Four models are kept warm in RAM at all times (`OLLAMA_MAX_LOADED_MODELS=4`, `OLLAMA_KEEP_ALIVE=-1`). Slots are filled by the benchmark playbook — no model names are hardcoded.
+Six models are kept warm across two Ollama instances (`OLLAMA_MAX_LOADED_MODELS=3` each, `OLLAMA_KEEP_ALIVE=-1`). Slots are filled automatically by the benchmark playbook — no model names are hardcoded.
 
-| Slot | Role                      | Selection                     | Rotation                              |
-|------|---------------------------|-------------------------------|---------------------------------------|
-| 1    | General-purpose primary   | Top general composite score   | Replaced if score < threshold         |
-| 2    | General-purpose secondary | 2nd general composite score   | Replaced if score < threshold         |
-| 3    | Coding primary            | Top coding composite score    | Locked; replaced only by re-benchmark |
-| 4    | Coding secondary          | 2nd coding composite score    | Rotatable: `-e slot4_model=<name>`    |
+```
+NUMA Node 1 — ollama.service     — port 11434  (general models)
+NUMA Node 0 — ollama-node0.service — port 11435 (coding models)
+```
 
-**Classification rule:** a model is classified `coding` if its coding composite score exceeds its general composite score by ≥ 0.15; otherwise `general`.
+| Slot | Instance      | Port  | Role                    | Selection                     | Rotation                                    |
+|------|---------------|-------|-------------------------|-------------------------------|---------------------------------------------|
+| 1    | Node 1        | 11434 | General primary (locked) | Top general composite score  | Replaced only by re-benchmark               |
+| 2    | Node 1        | 11434 | General secondary (locked)| 2nd general composite score | Replaced only by re-benchmark               |
+| 5    | Node 1        | 11434 | General rotate           | 3rd general composite score   | `-e slot5_model=<name>`                     |
+| 3    | Node 0        | 11435 | Coding primary (locked)  | Top coding composite score    | Replaced only by re-benchmark               |
+| 4    | Node 0        | 11435 | Coding secondary (locked)| 2nd coding composite score    | Replaced only by re-benchmark               |
+| 6    | Node 0        | 11435 | Coding rotate            | 3rd coding composite score    | `-e slot6_model=<name>`                     |
+
+**Classification rule:** a model is classified `coding` if its coding composite score exceeds its general composite score by ≥ 0.10; otherwise `general`.
+
+**Modelfile aliases** (`coder-128k`, `coder-32k`, `coder-rotate`, `llama-family`, `gemma-family`) are excluded from benchmarking to prevent KV-cache allocation stalls.
 
 ## Verification Steps
 
@@ -416,8 +444,10 @@ After a full `deploy_ai.yml` run, verify the deployment (substitute your actual 
 6. **Qdrant health** -- `curl -s http://<ai_server_ip>:6333/healthz` returns OK
 7. **CoreDNS resolution** -- `dig @<coredns_host_ip> vault.example.com` returns `<nginx_proxy_ip>`
 8. **NGINX configs** -- `ssh <nginx_proxy_ip> 'sudo nginx -t'` passes
-9. **OpenClaw** -- send a message to the Telegram bot, confirm response
+9. **OpenClaw** -- send a message to the Telegram bot, confirm response using slot1_general model
 10. **Benchmark report** -- check `benchmarks/results/benchmark_<timestamp>.md` for latest results
+11. **Node 0 Ollama** -- `curl -s -H "Authorization: Bearer <key>" http://<ai_server_ip>:11435/api/tags` returns model list
+12. **Both warmup services** -- `systemctl status ollama-warmup ollama-warmup-node0` both show `active (exited)`
 
 ## Role Reference
 

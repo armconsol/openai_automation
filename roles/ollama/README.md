@@ -2,69 +2,80 @@
 
 ## Purpose
 
-Install, configure, and maintain the Ollama inference server on the AI server host.
+Install, configure, and maintain Ollama inference server(s) on the AI server host.
+Two instances run simultaneously — one per NUMA socket — to utilize both CPU sockets
+on the Dell M630 (2× E5-2690v4).
 
-## Installation
+## Instances
 
-Ollama is installed using the official install script, which places the binary at
-`/usr/local/bin/ollama` and creates a systemd service. The script handles both fresh
-installs and upgrades.
+| Service                | Port  | NUMA Node | CPUs (physical only) | RAM binding | Purpose          |
+|------------------------|-------|-----------|----------------------|-------------|------------------|
+| `ollama.service`       | 11434 | Node 1    | 1 3 5 … 27 (odd)     | `--membind=1` | General models |
+| `ollama-node0.service` | 11435 | Node 0    | 0 2 4 … 26 (even)    | `--membind=0` | Coding models  |
 
-## Environment Variables
+Both instances share the same model storage directory (`/mnt/ai_data/ollama_models`)
+and Ollama API key. Weights are loaded once into the NUMA node's memory; they are not
+duplicated between instances.
 
-Configuration is applied via a systemd drop-in override file at
-`/etc/systemd/system/ollama.service.d/override.conf`.
+## Configuration
 
-| Variable                  | Value              | Description                                      |
-|---------------------------|--------------------|--------------------------------------------------|
-| `OLLAMA_HOST`             | `0.0.0.0:11434`   | Listen on all interfaces, port 11434             |
-| `OLLAMA_MODELS`           | `/mnt/ai_data/ollama/models` | Model storage directory                |
-| `OLLAMA_KEEP_ALIVE`       | `-1`               | Keep models loaded in GPU memory indefinitely    |
-| `OLLAMA_NUM_PARALLEL`     | `4`                | Number of parallel inference requests            |
-| `OLLAMA_MAX_LOADED_MODELS`| `4`                | Maximum models loaded in GPU memory at once      |
-| `OLLAMA_API_KEY`          | (from Vault)       | API key for authentication                       |
-| `OLLAMA_FLASH_ATTENTION`  | `1`                | Enable Flash Attention for performance           |
-| `OLLAMA_CONTEXT_LENGTH`   | `32768`            | Default context window size                      |
+### Node 1 — systemd override
 
-## Override.conf Approach
+Applied via `/etc/systemd/system/ollama.service.d/override.conf` (templated from
+`templates/ollama/override.conf.j2`):
 
-Rather than modifying the upstream systemd unit file (which would be overwritten on
-upgrades), this role uses a systemd drop-in directory:
+| Variable                   | Value                        | Description                                      |
+|----------------------------|------------------------------|--------------------------------------------------|
+| `OLLAMA_API_KEY`           | (from Vault)                 | Shared key for all API requests                  |
+| `OLLAMA_HOST`              | `0.0.0.0:11434`              | Listen on all interfaces, port 11434             |
+| `OLLAMA_MODELS`            | `/mnt/ai_data/ollama_models` | Shared model storage                             |
+| `OLLAMA_KEEP_ALIVE`        | `-1`                         | Never unload models from RAM                     |
+| `OLLAMA_FLASH_ATTENTION`   | `1`                          | Fused softmax — ~20% less memory bandwidth       |
+| `OLLAMA_NUM_THREADS`       | `14`                         | Physical cores on NUMA node 1 only               |
+| `OLLAMA_NUM_PARALLEL`      | `2`                          | Concurrent inference streams per instance        |
+| `OLLAMA_MAX_LOADED_MODELS` | `3`                          | 3 models warm per instance (6 total)             |
+| `CPUAffinity`              | `1 3 5 … 27`                 | Odd CPUs = socket 1 physical cores               |
+| `ExecStart`                | `numactl --membind=1 ollama serve` | Pin memory allocations to Node 1 RAM        |
 
-```
-/etc/systemd/system/ollama.service.d/override.conf
-```
+### Node 0 — standalone systemd unit
 
-This ensures environment variables survive Ollama upgrades while keeping the
-upstream service file intact.
+Deployed to `/etc/systemd/system/ollama-node0.service` (from
+`templates/ollama/ollama-node0.service.j2`). Uses the same variables but with:
 
-## Why OLLAMA_API_KEY
+| Variable   | Value           |
+|------------|-----------------|
+| `OLLAMA_HOST` | `0.0.0.0:11435` |
+| `CPUAffinity` | `0 2 4 … 26` |
+| `ExecStart`   | `numactl --membind=0 ollama serve` |
 
-Without an API key, anyone with network access to port 11434 can use the Ollama API
-to run inference, pull models, or delete models. Setting `OLLAMA_API_KEY` requires
-all API requests to include an `Authorization: Bearer <key>` header, preventing
-unauthenticated access.
+## NUMA Rationale
+
+On the M630 with dual E5-2690v4:
+- **Node 1** (odd CPUs) has ~120 GB free RAM — assigned general models (larger)
+- **Node 0** (even CPUs) has ~75 GB free RAM — assigned coding models
+
+Without `numactl --membind`, the OS allocates model weights and KV cache across both
+nodes, causing cross-socket memory traffic (~40 GB/s vs ~68–75 GB/s local).
+`CPUAffinity` alone sets the scheduler; `numactl` sets the memory policy.
 
 ## OLLAMA_FLASH_ATTENTION
 
-Flash Attention is a GPU memory optimization that reduces memory usage and increases
-throughput for transformer inference. Setting `OLLAMA_FLASH_ATTENTION=1` enables
-this optimization for all models. This is a newer addition to Ollama and provides
-measurable performance improvements.
+Enables fused softmax kernel — reduces attention memory bandwidth by ~20% and improves
+throughput at all context lengths on AVX2 (E5-2690v4). Note: `OLLAMA_KV_CACHE_TYPE`
+is intentionally **not** set — q8_0 dequantization overhead regressed throughput on
+this CPU despite the bandwidth savings.
 
 ## Upgrade Procedure
 
-To upgrade Ollama to the latest version:
-
 ```bash
-ansible-playbook playbooks/03_ollama.yml
+ansible-playbook playbooks/02_infrastructure.yml -K -e @local.yml --tags ollama
 ```
 
-The official install script detects the existing installation and performs an
-in-place upgrade. The service is restarted after the upgrade.
+The official install script detects the existing installation and performs an in-place
+upgrade. Both `ollama.service` and `ollama-node0.service` are restarted.
 
 ## Tags
 
 ```bash
-ansible-playbook playbooks/site.yml --tags ollama
+ansible-playbook playbooks/site.yml --tags ollama -K -e @local.yml
 ```

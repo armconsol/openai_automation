@@ -84,6 +84,31 @@
       tags:
         - benchmark-discover
 
+    - name: "Benchmark | Stop warmup services for clean benchmark run"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - ollama-warmup.service
+        - ollama-warmup-node0.service
+      failed_when: false
+      become: true
+      tags:
+        - benchmark-setup
+
+    - name: "Benchmark | Wait for node0 Ollama API to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ ollama_node0_port }}/api/tags"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: ollama_node0_ready
+      retries: 24
+      delay: 5
+      until: ollama_node0_ready.status == 200
+      tags:
+        - benchmark-setup
+
     - name: "Benchmark | Discover installed models"
       ansible.builtin.command: ollama list
       changed_when: false
@@ -100,44 +125,124 @@
       tags:
         - benchmark-discover
 
-    - name: "Benchmark | Set models_to_benchmark to all installed models"
+    - name: "Benchmark | Parse model sizes from ollama list"
       ansible.builtin.set_fact:
-        models_to_benchmark: "{{ installed_models }}"
+        _benchmark_sizes_json: |
+          {% set ns = namespace(d={}) %}
+          {% for line in ollama_list_output.stdout_lines[1:] %}
+          {%   set p = line.split() %}
+          {%   if p | length >= 4 %}
+          {%     set gb = (p[2] | float) if (p[3] | upper == 'GB') else ((p[2] | float) / 1024) %}
+          {%     set _ = ns.d.update({p[0]: gb}) %}
+          {%   endif %}
+          {% endfor %}
+          {{ ns.d | to_json }}
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Partition models into small, medium, and large passes"
+      ansible.builtin.set_fact:
+        _small_models:  "{{ _alias_filtered | select('in', _small_ok)  | list }}"
+        _medium_models: "{{ _alias_filtered | select('in', _medium_ok) | list }}"
+        _large_models:  "{{ _alias_filtered | reject('in', _small_ok)  | reject('in', _medium_ok) | list }}"
+        models_to_benchmark: "{{ _alias_filtered | list }}"
+      vars:
+        _sizes:     "{{ _benchmark_sizes_json | from_json }}"
+        _small_cut:  "{{ (benchmark_small_max_gb  | float) / (benchmark_size_overhead_factor | float) }}"
+        _medium_cut: "{{ (benchmark_medium_max_gb | float) / (benchmark_size_overhead_factor | float) }}"
+        _small_ok:  "{{ _sizes | dict2items | selectattr('value', 'le', _small_cut  | float) | map(attribute='key') | list }}"
+        _medium_ok: "{{ _sizes | dict2items | selectattr('value', 'gt', _small_cut  | float)
+                                            | selectattr('value', 'le', _medium_cut | float)
+                                            | map(attribute='key') | list }}"
+        _alias_filtered: "{{ installed_models | reject('match', '^(' ~ benchmark_skip_aliases | join('|') ~ ')(:|$)') | list }}"
       when: benchmark_models | default('') | length == 0
       tags:
         - benchmark-discover
 
     - name: "Benchmark | Set models_to_benchmark to specified subset"
       ansible.builtin.set_fact:
-        models_to_benchmark: "{{ benchmark_models.split(',') | map('trim') | list }}"
+        models_to_benchmark: "{{ _specified }}"
+        _small_models:  "{{ _specified | select('in', _small_ok)  | list }}"
+        _medium_models: "{{ _specified | select('in', _medium_ok) | list }}"
+        _large_models:  "{{ _specified | reject('in', _small_ok)  | reject('in', _medium_ok) | list }}"
+      vars:
+        _specified: "{{ benchmark_models.split(',') | map('trim') | list }}"
+        _sizes:     "{{ _benchmark_sizes_json | from_json }}"
+        _small_cut:  "{{ (benchmark_small_max_gb  | float) / (benchmark_size_overhead_factor | float) }}"
+        _medium_cut: "{{ (benchmark_medium_max_gb | float) / (benchmark_size_overhead_factor | float) }}"
+        _small_ok:  "{{ _sizes | dict2items | selectattr('value', 'le', _small_cut  | float) | map(attribute='key') | list }}"
+        _medium_ok: "{{ _sizes | dict2items | selectattr('value', 'gt', _small_cut  | float)
+                                            | selectattr('value', 'le', _medium_cut | float)
+                                            | map(attribute='key') | list }}"
       when: benchmark_models | default('') | length > 0
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Initialize batch accumulator facts"
+      ansible.builtin.set_fact:
+        bench_all_results: []
+        all_eligible_models: []
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Build per-model benchmark timeout map"
+      ansible.builtin.set_fact:
+        _benchmark_timeout_map_json: |
+          {% set ns = namespace(d={}) %}
+          {% for m in models_to_benchmark %}
+          {%   if m in _small_models %}
+          {%     set _ = ns.d.update({m: benchmark_small_timeout | int}) %}
+          {%   elif m in _medium_models %}
+          {%     set _ = ns.d.update({m: benchmark_medium_timeout | int}) %}
+          {%   else %}
+          {%     set _ = ns.d.update({m: benchmark_large_timeout | int}) %}
+          {%   endif %}
+          {% endfor %}
+          {{ ns.d | to_json }}
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Parse benchmark timeout map"
+      ansible.builtin.set_fact:
+        _benchmark_timeout_map: "{{ _benchmark_timeout_map_json | from_json }}"
+      tags:
+        - benchmark-discover
+
+    - name: "Benchmark | Sort models largest-first so heaviest models land on node1 (120 GB)"
+      ansible.builtin.set_fact:
+        models_to_benchmark: >-
+          {{ (_large_models + _medium_models + _small_models)
+             | select('in', models_to_benchmark) | list }}
       tags:
         - benchmark-discover
 
     - name: "Benchmark | Display models to benchmark"
       ansible.builtin.debug:
-        msg: "Will benchmark the following models: {{ models_to_benchmark }}"
+        msg:
+          - "Small  pass (timeout {{ benchmark_small_timeout }}s,  ≤{{ benchmark_small_max_gb }}GB):  {{ _small_models }}"
+          - "Medium pass (timeout {{ benchmark_medium_timeout }}s, {{ benchmark_small_max_gb }}–{{ benchmark_medium_max_gb }}GB): {{ _medium_models }}"
+          - "Large  pass (timeout {{ benchmark_large_timeout }}s, >{{ benchmark_medium_max_gb }}GB): {{ _large_models }}"
+          - "Load timeout (warm-up 'Hi' prompt): {{ benchmark_load_timeout }}s"
+          - "Total: {{ models_to_benchmark | length }} models, {{ (models_to_benchmark | batch(6) | list) | length }} batch(es) of ≤6"
       tags:
         - benchmark-discover
 
-    - name: "Benchmark | Run test prompts against each model"
-      ansible.builtin.uri:
-        url: "{{ ollama_api_url }}/api/generate"
-        method: POST
-        body_format: json
-        body:
-          model: "{{ item.0 }}"
-          prompt: "{{ test_prompts[item.1].prompt }}"
-          stream: false
-        headers:
-          Authorization: "Bearer {{ ollama_api_key }}"
-        timeout: 300
-        status_code: 200
-      loop: "{{ models_to_benchmark | product(test_prompts.keys() | list) | list }}"
+    - name: "Benchmark | Process batch {{ _loop_idx + 1 }} of {{ models_to_benchmark | batch(6) | list | length }}"
+      ansible.builtin.include_tasks: _bench_tier_batch.yml
+      vars:
+        _batch_node1: "{{ _batch[:3] }}"
+        _batch_node0: "{{ _batch[3:] }}"
+      loop: "{{ models_to_benchmark | batch(6) | list }}"
       loop_control:
-        label: "{{ item.0 }} / {{ item.1 }}"
-      register: benchmark_raw_results
-      failed_when: false
+        loop_var: _batch
+        label: "batch {{ _loop_idx + 1 }}: node1={{ _batch[:3] }} node0={{ _batch[3:] }}"
+        index_var: _loop_idx
+      tags:
+        - benchmark-run
+
+    - name: "Benchmark | Display models that failed to load"
+      ansible.builtin.debug:
+        msg: "Load failures (excluded from scoring): {{ models_to_benchmark | reject('in', all_eligible_models) | list }}"
       tags:
         - benchmark-run
 
@@ -145,9 +250,9 @@
       ansible.builtin.set_fact:
         model_metrics: |
           {% set ns = namespace(results={}) %}
-          {% for model in models_to_benchmark %}
+          {% for model in all_eligible_models %}
           {%   set ns2 = namespace(coding_quality=0, coding_count=0, general_quality=0, general_count=0, total_toks=0, total_eval_time=0, ttft_sum=0, ttft_count=0, latency_ns=0) %}
-          {%   for result in benchmark_raw_results.results %}
+          {%   for result in bench_all_results %}
           {%     if result.item[0] == model and result.status == 200 %}
           {%       set test_name = result.item[1] %}
           {%       set resp = result.json | default({}) %}
@@ -160,7 +265,7 @@
           {%       set ns2.ttft_sum = ns2.ttft_sum + prompt_eval_duration %}
           {%       set ns2.ttft_count = ns2.ttft_count + 1 %}
           {%       if test_name == 'latency' %}
-          {%         set ns2.latency_ns = eval_duration + prompt_eval_duration %}
+          {%         set ns2.latency_ns = ((resp.total_duration | default(0) | int) - (resp.load_duration | default(0) | int)) | abs %}
           {%       endif %}
           {%       set resp_len = response_text | length %}
           {%       if test_name in ['code_gen', 'debug', 'refactor'] %}
@@ -239,9 +344,14 @@
           {% set coding_sorted = coding_models | sort(attribute='composite', reverse=true) %}
           {% set slot1 = general_sorted[0].name if general_sorted | length > 0 else 'none' %}
           {% set slot2 = general_sorted[1].name if general_sorted | length > 1 else (general_sorted[0].name if general_sorted | length > 0 else 'none') %}
+          {% set slot5 = general_sorted[2].name if general_sorted | length > 2 else 'none' %}
           {% set slot3 = coding_sorted[0].name if coding_sorted | length > 0 else (general_sorted[0].name if general_sorted | length > 0 else 'none') %}
           {% set slot4 = coding_sorted[1].name if coding_sorted | length > 1 else (coding_sorted[0].name if coding_sorted | length > 0 else 'none') %}
-          {{ {'slot1_general': slot1, 'slot2_general': slot2, 'slot3_coding': slot3, 'slot4_coding': slot4, 'all_metrics': parsed_metrics, 'general_ranking': general_sorted, 'coding_ranking': coding_sorted} | to_json }}
+          {% set slot6 = coding_sorted[2].name if coding_sorted | length > 2 else 'none' %}
+          {{ {'slot1_general': slot1, 'slot2_general': slot2, 'slot5_general_rotate': slot5,
+              'slot3_coding': slot3, 'slot4_coding': slot4, 'slot6_coding_rotate': slot6,
+              'all_metrics': parsed_metrics, 'general_ranking': general_sorted,
+              'coding_ranking': coding_sorted} | to_json }}
       tags:
         - benchmark-select
 
@@ -255,12 +365,16 @@
       ansible.builtin.debug:
         msg:
           - "============================================="
-          - "  MODEL SELECTION RESULTS"
+          - "  MODEL SELECTION RESULTS  (6-slot / 2-socket)"
           - "============================================="
-          - "  Slot 1 (General Primary):  {{ selection.slot1_general }}"
-          - "  Slot 2 (General Secondary): {{ selection.slot2_general }}"
-          - "  Slot 3 (Coding Primary):   {{ selection.slot3_coding }}"
-          - "  Slot 4 (Coding Secondary): {{ selection.slot4_coding }}"
+          - "  Node 1 — General (port 11434)"
+          - "  Slot 1 (locked):   {{ selection.slot1_general }}"
+          - "  Slot 2 (locked):   {{ selection.slot2_general }}"
+          - "  Slot 5 (rotate):   {{ selection.slot5_general_rotate }}"
+          - "  Node 0 — Coding (port 11435)"
+          - "  Slot 3 (locked):   {{ selection.slot3_coding }}"
+          - "  Slot 4 (locked):   {{ selection.slot4_coding }}"
+          - "  Slot 6 (rotate):   {{ selection.slot6_coding_rotate }}"
           - "============================================="
       tags:
         - benchmark-select
@@ -276,13 +390,15 @@
         content: |
           # Benchmark Results - {{ benchmark_timestamp }}
 
-          ## Model Selection
-          | Slot | Role | Model | Composite Score |
-          |------|------|-------|----------------|
-          | 1 | General (Primary) | {{ selection.slot1_general }} | {{ parsed_metrics[selection.slot1_general].general_composite | default('N/A') }} |
-          | 2 | General (Secondary) | {{ selection.slot2_general }} | {{ parsed_metrics[selection.slot2_general].general_composite | default('N/A') }} |
-          | 3 | Coding (Primary) | {{ selection.slot3_coding }} | {{ parsed_metrics[selection.slot3_coding].coding_composite | default('N/A') }} |
-          | 4 | Coding (Secondary) | {{ selection.slot4_coding }} | {{ parsed_metrics[selection.slot4_coding].coding_composite | default('N/A') }} |
+          ## Model Selection (6-slot / 2-socket)
+          | Slot | Socket | Role | Model | Composite Score |
+          |------|--------|------|-------|----------------|
+          | 1 | Node 1 (port 11434) | General (locked) | {{ selection.slot1_general }} | {{ (parsed_metrics[selection.slot1_general].general_composite if selection.slot1_general in parsed_metrics else 'N/A') }} |
+          | 2 | Node 1 (port 11434) | General (locked) | {{ selection.slot2_general }} | {{ (parsed_metrics[selection.slot2_general].general_composite if selection.slot2_general in parsed_metrics else 'N/A') }} |
+          | 5 | Node 1 (port 11434) | General (rotate) | {{ selection.slot5_general_rotate }} | {{ (parsed_metrics[selection.slot5_general_rotate].general_composite if selection.slot5_general_rotate in parsed_metrics else 'N/A') }} |
+          | 3 | Node 0 (port 11435) | Coding (locked) | {{ selection.slot3_coding }} | {{ (parsed_metrics[selection.slot3_coding].coding_composite if selection.slot3_coding in parsed_metrics else 'N/A') }} |
+          | 4 | Node 0 (port 11435) | Coding (locked) | {{ selection.slot4_coding }} | {{ (parsed_metrics[selection.slot4_coding].coding_composite if selection.slot4_coding in parsed_metrics else 'N/A') }} |
+          | 6 | Node 0 (port 11435) | Coding (rotate) | {{ selection.slot6_coding_rotate }} | {{ (parsed_metrics[selection.slot6_coding_rotate].coding_composite if selection.slot6_coding_rotate in parsed_metrics else 'N/A') }} |
 
           ## Detailed Metrics
           {% for model, metrics in parsed_metrics.items() %}
@@ -342,3 +458,15 @@
       changed_when: true
       tags:
         - benchmark-pull
+
+    - name: "Benchmark | Restart warmup services after benchmark"
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+      loop:
+        - ollama-warmup.service
+        - ollama-warmup-node0.service
+      failed_when: false
+      become: true
+      tags:
+        - benchmark-cleanup

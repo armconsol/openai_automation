@@ -1,0 +1,7 @@
+---
+fail2ban_bantime: 3600
+fail2ban_findtime: 600
+fail2ban_maxretry_ssh: 5
+fail2ban_maxretry_nginx_4xx: 20
+fail2ban_maxretry_nginx_auth: 5
+fail2ban_ignoreip: "127.0.0.1/8 ::1"

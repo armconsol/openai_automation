@@ -11,7 +11,9 @@
   vars:
     model_selection_file: "{{ playbook_dir }}/../benchmarks/results/model_selection.json"
     modelfiles_dir: /mnt/ai_data/ollama_models/modelfiles
-    slot4_model: ""
+    slot4_model: ""   # legacy override kept for backwards compatibility
+    slot5_model: ""   # overrides slot5_general_rotate
+    slot6_model: ""   # overrides slot6_coding_rotate
     ollama_api_key: "{{ lookup('community.hashi_vault.hashi_vault', vault_secret_prefix ~ '/ollama:api_key token=' ~ lookup('ansible.builtin.file', vault_token_file) ~ ' url=' ~ vault_url) }}"
 
   tasks:
@@ -38,13 +40,31 @@
       tags:
         - models-load
 
+    - name: "Models | Apply slot5 override if provided"
+      ansible.builtin.set_fact:
+        model_selection: "{{ model_selection | combine({'slot5_general_rotate': slot5_model}) }}"
+      when: slot5_model | length > 0
+      tags:
+        - models-load
+
+    - name: "Models | Apply slot6 override if provided"
+      ansible.builtin.set_fact:
+        model_selection: "{{ model_selection | combine({'slot6_coding_rotate': slot6_model}) }}"
+      when: slot6_model | length > 0
+      tags:
+        - models-load
+
     - name: "Models | Display selected models"
       ansible.builtin.debug:
         msg:
-          - "Slot 1 (General Primary):   {{ model_selection.slot1_general }}"
-          - "Slot 2 (General Secondary):  {{ model_selection.slot2_general }}"
-          - "Slot 3 (Coding Primary):    {{ model_selection.slot3_coding }}"
-          - "Slot 4 (Coding Secondary):  {{ model_selection.slot4_coding }}"
+          - "=== Node 1 — General (port 11434) ==="
+          - "Slot 1 (locked):  {{ model_selection.slot1_general }}"
+          - "Slot 2 (locked):  {{ model_selection.slot2_general }}"
+          - "Slot 5 (rotate):  {{ model_selection.slot5_general_rotate | default('none') }}"
+          - "=== Node 0 — Coding (port 11435) ==="
+          - "Slot 3 (locked):  {{ model_selection.slot3_coding }}"
+          - "Slot 4 (locked):  {{ model_selection.slot4_coding }}"
+          - "Slot 6 (rotate):  {{ model_selection.slot6_coding_rotate | default('none') }}"
       tags:
         - models-load
 
@@ -72,8 +92,10 @@
       loop:
         - "{{ model_selection.slot1_general }}"
         - "{{ model_selection.slot2_general }}"
+        - "{{ model_selection.slot5_general_rotate | default('none') }}"
         - "{{ model_selection.slot3_coding }}"
         - "{{ model_selection.slot4_coding }}"
+        - "{{ model_selection.slot6_coding_rotate | default('none') }}"
       when:
         - item | length > 0
         - item != 'none'
@@ -130,6 +152,20 @@
       tags:
         - models-modelfile
 
+    - name: "Models | Template coder-rotate Modelfile"
+      ansible.builtin.copy:
+        content: |
+          FROM {{ model_selection.slot6_coding_rotate }}
+          PARAMETER num_ctx 32768
+          SYSTEM You are an expert coding assistant. You write clean, efficient, well-documented code. Always include type hints and follow best practices.
+        dest: "{{ modelfiles_dir }}/Modelfile.coder-rotate"
+        mode: "0644"
+      when:
+        - model_selection.slot6_coding_rotate | default('') | length > 0
+        - model_selection.slot6_coding_rotate | default('none') != 'none'
+      tags:
+        - models-modelfile
+
     - name: "Models | Template llama-family Modelfile"
       ansible.builtin.copy:
         content: |
@@ -156,8 +192,9 @@
     - name: "Models | Register custom models with Ollama"
       ansible.builtin.command: "ollama create {{ item.name }} -f {{ modelfiles_dir }}/{{ item.file }}"
       loop:
-        - { name: "coder-128k", file: "Modelfile.coder-128k" }
-        - { name: "coder-32k",  file: "Modelfile.coder-32k",  slot: "{{ model_selection.slot4_coding }}" }
+        - { name: "coder-128k",   file: "Modelfile.coder-128k" }
+        - { name: "coder-32k",    file: "Modelfile.coder-32k",    slot: "{{ model_selection.slot4_coding }}" }
+        - { name: "coder-rotate", file: "Modelfile.coder-rotate", slot: "{{ model_selection.slot6_coding_rotate | default('none') }}" }
         - { name: "llama-family", file: "Modelfile.llama-family" }
         - { name: "gemma-family", file: "Modelfile.gemma-family" }
       when: item.slot is not defined or (item.slot | length > 0 and item.slot != 'none')
@@ -199,5 +236,35 @@
         name: ollama-warmup
         enabled: true
         state: started
+      tags:
+        - models-warmup
+
+    # ── Node0 warmup service ─────────────────────────────────────────
+    - name: "Models | Template node0 warmup script"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama/warmup-node0.sh.j2"
+        dest: /usr/local/bin/ollama-warmup-node0.sh
+        mode: "0755"
+        owner: root
+        group: root
+      tags:
+        - models-warmup
+
+    - name: "Models | Template node0 warmup systemd service"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/systemd/ollama-warmup-node0.service.j2"
+        dest: /etc/systemd/system/ollama-warmup-node0.service
+        mode: "0644"
+        owner: root
+        group: root
+      tags:
+        - models-warmup
+
+    - name: "Models | Enable and start node0 warmup service"
+      ansible.builtin.systemd:
+        name: ollama-warmup-node0
+        enabled: true
+        state: started
+        daemon_reload: true
       tags:
         - models-warmup

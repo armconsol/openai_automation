@@ -77,6 +77,27 @@
       tags:
         - openclaw-config
 
+    - name: "OpenClaw | Load model selection for model assignment"
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/../benchmarks/results/model_selection.json"
+      delegate_to: localhost
+      become: false
+      register: _model_sel_raw
+      ignore_errors: true
+      when: not skip_openclaw
+      tags:
+        - openclaw-config
+
+    - name: "OpenClaw | Set openclaw_model from benchmark slot 1 (best general)"
+      ansible.builtin.set_fact:
+        openclaw_model: "{{ (_model_sel_raw.content | b64decode | from_json).slot1_general }}"
+      when:
+        - not skip_openclaw
+        - _model_sel_raw is not failed
+        - _model_sel_raw.content is defined
+      tags:
+        - openclaw-config
+
     # ── Install Python dependencies ───────────────────────────────────
     - name: "OpenClaw | Install Python dependencies"
       ansible.builtin.pip:

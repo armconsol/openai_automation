@@ -6,22 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Full deployment
-ansible-playbook playbooks/site.yml
+ansible-playbook playbooks/site.yml -K -e @local.yml
 
 # Run a single playbook
-ansible-playbook playbooks/03_benchmark.yml
+ansible-playbook playbooks/03_benchmark.yml -K -e @local.yml
 
 # Run with tags (each playbook defines granular tags)
-ansible-playbook playbooks/site.yml --tags ollama,docker
+ansible-playbook playbooks/site.yml --tags ollama,docker -K -e @local.yml
 
 # Benchmark and update warm-up slots in one shot
-ansible-playbook playbooks/03_benchmark.yml && ansible-playbook playbooks/04_models.yml
+ansible-playbook playbooks/03_benchmark.yml -K -e @local.yml && \
+ansible-playbook playbooks/04_models.yml -K -e @local.yml
 
-# Override slot 4 with a specific model
-ansible-playbook playbooks/04_models.yml -e "slot4_model=qwen2.5-coder:7b"
+# Rotate general slot (Node 1, port 11434)
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot5_model=mistral:latest"
+
+# Rotate coding slot (Node 0, port 11435)
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot6_model=llama3.1:70b"
 
 # Run against a subset of hosts
-ansible-playbook playbooks/09_nginx.yml --limit nginx_proxy
+ansible-playbook playbooks/09_nginx.yml --limit nginx_proxy -K -e @local.yml
 
 # Lint playbooks
 ansible-lint playbooks/
@@ -30,7 +34,7 @@ ansible-lint playbooks/
 ansible-galaxy collection install -r requirements.yml
 
 # Check mode (dry run)
-ansible-playbook playbooks/site.yml --check --diff
+ansible-playbook playbooks/site.yml --check --diff -K -e @local.yml
 ```
 
 ## Required Local Configuration
@@ -87,17 +91,20 @@ All credentials live exclusively in Vault under `secret/data/{{ vault_project_sl
 
 **Composite score formula:**
 ```
-composite = (quality × 0.45) + (tokens_per_sec / 30, capped at 1.0) × 0.30 + (1 - ttft_ms/5000, floored at 0) × 0.25
+composite = (quality × 0.45) + (tokens_per_sec / ceiling, capped at 1.0) × 0.30 + (1 - ttft_ms/5000, floored at 0) × 0.25
 ```
+`benchmark_toks_norm_ceiling` defaults to 40 (dual-socket target).
 
-**Slot classification:** if `coding_composite - general_composite >= 0.15` (configurable via `benchmark_coding_threshold`), model goes to a coding slot; otherwise general.
+**Slot classification:** if `coding_composite - general_composite >= 0.10` (configurable via `benchmark_coding_threshold`), model goes to a coding slot; otherwise general.
 
-**4 warm-up slots always hot in RAM:**
-- Slots 1–2: top general-purpose models by composite score
-- Slots 3–4: top coding models by composite score
-- Slot 4 is user-rotatable via `-e slot4_model=<name>` without re-benchmarking
+**6 warm-up slots across two NUMA instances:**
+- Node 1 (port 11434): slots 1–2 locked general + slot 5 rotatable general
+- Node 0 (port 11435): slots 3–4 locked coding + slot 6 rotatable coding
+- Slots 5/6 rotatable via `-e slot5_model=<name>` / `-e slot6_model=<name>` without re-benchmarking
 
-`04_models.yml` creates named Ollama Modelfiles (`coder-128k`, `coder-32k`, `llama-family`, `gemma-family`) and a `ollama-warmup.service` systemd one-shot that pre-loads all 4 slots after Ollama starts.
+`04_models.yml` creates Modelfiles (`coder-128k`, `coder-32k`, `coder-rotate`, `llama-family`, `gemma-family`) and two warmup services: `ollama-warmup.service` (Node 1) and `ollama-warmup-node0.service` (Node 0).
+
+**Benchmark alias filter:** `benchmark_skip_aliases` in `group_vars/all.yml` lists the Modelfile aliases — the benchmark playbook excludes these from the test loop to prevent 32k-token KV-cache allocations from stalling the run.
 
 ### Key Variables
 

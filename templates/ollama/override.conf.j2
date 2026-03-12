@@ -9,12 +9,6 @@ Environment="OLLAMA_KEEP_ALIVE=-1"
 # Flash attention: fused softmax, ~20% less memory bandwidth, faster on AVX2
 Environment="OLLAMA_FLASH_ATTENTION=1"
 
-# KV cache quantization: q8_0 halves KV cache memory vs fp16.
-# Attention reads dominate memory bandwidth at long contexts; smaller KV =
-# fewer bytes transferred per token generated. q8_0 over q4_0: negligible
-# quality loss vs significant noise at long contexts with q4_0.
-Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
-
 # Threads: 14 physical cores on NUMA node 1 only (no hyperthreads).
 # LLM inference is memory-bandwidth-bound; HT siblings share the same memory
 # pipeline and add scheduling overhead without adding bandwidth.
@@ -24,19 +18,26 @@ Environment="OLLAMA_NUM_THREADS={{ ollama_num_threads }}"
 # Keeps per-request throughput high for interactive/single-user workloads.
 Environment="OLLAMA_NUM_PARALLEL={{ ollama_num_parallel }}"
 
-# Keep 4 models warm in RAM (KEEP_ALIVE=-1 means never unload)
+# Keep 3 models warm in RAM per instance (KEEP_ALIVE=-1 means never unload; 6 total across both sockets)
 Environment="OLLAMA_MAX_LOADED_MODELS={{ ollama_max_loaded_models }}"
 
 # ── NUMA / CPU binding ────────────────────────────────────────────────────
-# ExecStart override: numactl --membind=1 guarantees model weights and KV
-# cache are allocated from NUMA node 1 RAM (120 GB free). CPUAffinity alone
-# does not set the memory policy; numactl makes it explicit.
+# numactl --cpunodebind pins the scheduler to all logical CPUs on node 1
+# (14 physical + 14 HT siblings = 28 CPUs). This avoids two failure modes:
+#
+#  1. numactl --membind=1 (MPOL_BIND) suppresses khugepaged THP promotion
+#     for the model's ~2.75 GB anonymous allocation, causing ~700k 4 KB TLB
+#     entries and near-100% L2-STLB miss rate → 128x throughput loss.
+#
+#  2. CPUAffinity restricted to 14 physical cores only forces ~56 Go runtime
+#     OS threads to compete with 14 GGML compute threads on 14 CPUs (5:1
+#     oversubscription). GGML busy-wait barriers then block waiting threads
+#     from checking in → cascading stall across ~400 ops/token → 128x loss.
+#
+# --cpunodebind (sched_setaffinity only, no set_mempolicy) gives 28 CPUs and
+# MPOL_DEFAULT, so allocations go to node 1 naturally and THP works freely.
 ExecStart=
-ExecStart=/usr/bin/numactl --membind=1 {{ ollama_binary_path }} serve
-
-# Restrict scheduler to physical cores on node 1 only (odd CPUs 1–27).
-# Omitting HT siblings (29–55) prevents cross-HT contention on the memory bus.
-CPUAffinity={{ ollama_cpu_affinity }}
+ExecStart=/usr/bin/numactl --cpunodebind={{ ollama_numa_node }} {{ ollama_binary_path }} serve
 
 # ── Memory hardening ───────────────────────────────────────────────────────
 # Prevent model weights from being paged out under memory pressure

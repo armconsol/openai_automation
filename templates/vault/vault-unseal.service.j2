@@ -1,0 +1,15 @@
+[Unit]
+Description=HashiCorp Vault Auto-Unseal
+Documentation=https://developer.hashicorp.com/vault/docs/concepts/seal
+After=vault.service network.target
+Requires=vault.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/vault-unseal.sh
+RemainAfterExit=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

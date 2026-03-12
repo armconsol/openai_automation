@@ -2,79 +2,109 @@
 
 ## Purpose
 
-Manage the Ollama model lifecycle -- pulling models, creating custom Modelfile
-configurations, and running a warm-up service to ensure models are loaded into GPU
-memory at boot time.
+Manage the Ollama model lifecycle — pulling models, creating custom Modelfile
+configurations, and running warm-up services to ensure models are loaded into RAM
+at boot time across both NUMA instances.
 
-## Slot System
+## 6-Slot System
 
-| Slot | Role               | Selection Method                         |
-|------|--------------------|------------------------------------------|
-| 1    | Primary Coding     | Highest coding composite from benchmarks |
-| 2    | Primary General    | Highest general composite from benchmarks|
-| 3    | Secondary / Backup | Next-best overall average composite      |
-| 4    | Experimental       | Manual override via `-e slot4_model=<name>` |
+| Slot | Instance      | Port  | Role             | Selection                      | Rotation                    |
+|------|---------------|-------|------------------|--------------------------------|-----------------------------|
+| 1    | Node 1        | 11434 | General (locked) | Top general composite          | Re-benchmark only           |
+| 2    | Node 1        | 11434 | General (locked) | 2nd general composite          | Re-benchmark only           |
+| 5    | Node 1        | 11434 | General (rotate) | 3rd general composite          | `-e slot5_model=<name>`     |
+| 3    | Node 0        | 11435 | Coding (locked)  | Top coding composite           | Re-benchmark only           |
+| 4    | Node 0        | 11435 | Coding (locked)  | 2nd coding composite           | Re-benchmark only           |
+| 6    | Node 0        | 11435 | Coding (rotate)  | 3rd coding composite           | `-e slot6_model=<name>`     |
 
 ## Slot Rotation
 
-To override slot 4 with a specific model at runtime:
+Rotate the general slot on Node 1 (port 11434):
 
 ```bash
-ansible-playbook playbooks/03_ollama.yml -e slot4_model=mistral:7b
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot5_model=mistral:latest"
 ```
 
-Slots 1-3 are automatically assigned based on the latest benchmark results in
-`model_selection.json`. Slot 4 is always user-controlled.
+Rotate the coding slot on Node 0 (port 11435):
+
+```bash
+ansible-playbook playbooks/04_models.yml -K -e @local.yml -e "slot6_model=llama3.1:70b"
+```
+
+Both at once:
+
+```bash
+ansible-playbook playbooks/04_models.yml -K -e @local.yml \
+  -e "slot5_model=mistral:latest" -e "slot6_model=command-r:35b"
+```
+
+Reset both rotate slots back to benchmark recommendations:
+
+```bash
+ansible-playbook playbooks/04_models.yml -K -e @local.yml
+```
 
 ## Modelfile Configurations
 
-Custom Modelfile variants are created for fine-tuned context windows and use cases:
+Custom Modelfile variants are created for fine-tuned context windows:
 
-| Custom Model          | Base Model           | Context Window | Use Case                    |
-|-----------------------|----------------------|----------------|-----------------------------|
-| `coding-primary`     | (slot 1 model)       | 32768          | Code generation and debugging |
-| `general-primary`    | (slot 2 model)       | 16384          | General conversation and reasoning |
-| `backup`             | (slot 3 model)       | 16384          | Fallback for either category |
-| `experimental`       | (slot 4 model)       | 8192           | Testing new models           |
+| Custom Model    | Base Slot    | Context | Port  | Use Case                         |
+|-----------------|--------------|---------|-------|----------------------------------|
+| `coder-128k`    | slot3_coding | 32768   | 11435 | Primary coding (large context)   |
+| `coder-32k`     | slot4_coding | 32768   | 11435 | Secondary coding                 |
+| `coder-rotate`  | slot6_coding_rotate | 32768 | 11435 | Rotatable coding model      |
+| `llama-family`  | llama3.2:3b  | 8192    | 11434 | Family-safe general assistant    |
+| `gemma-family`  | llama3.1:8b  | 8192    | 11434 | Family-safe general assistant    |
 
-## Warm-up Service
+**These aliases are excluded from benchmarking** via `benchmark_skip_aliases` — their
+32k-token parameter allocations stall the benchmark loop with 285-second responses.
 
-The role deploys `ollama-warmup.service`, a oneshot systemd service that runs after
-`ollama.service` starts.
+## Warm-up Services
 
-**Why it is needed:** Even though `OLLAMA_KEEP_ALIVE=-1` keeps models loaded in GPU
-memory indefinitely once loaded, Ollama does not automatically load models on
-startup. The warm-up service sends a minimal inference request to each slot model,
-triggering the initial load into GPU memory. Without this, the first user request
-to each model would experience a long delay while the model is loaded.
+Two oneshot systemd services pre-load models after their respective Ollama instances start:
 
-The warm-up service:
+| Service                      | Warms               | Instance            |
+|------------------------------|---------------------|---------------------|
+| `ollama-warmup.service`      | slots 1, 2, 5       | Node 1 (port 11434) |
+| `ollama-warmup-node0.service`| slots 3, 4, 6       | Node 0 (port 11435) |
 
-1. Waits for Ollama API to be healthy
-2. Sends a short prompt to each configured slot model
-3. Exits after all models are loaded
+`OLLAMA_KEEP_ALIVE=-1` keeps models pinned once loaded. The warmup services only
+need to run once after boot; subsequent requests hit already-loaded models immediately.
+
+Check warmup status:
+
+```bash
+systemctl status ollama-warmup ollama-warmup-node0
+```
+
+Re-run warmup manually (e.g. after rotating a slot):
+
+```bash
+systemctl restart ollama-warmup          # Node 1 general models
+systemctl restart ollama-warmup-node0    # Node 0 coding models
+```
 
 ## model_selection.json
 
-The model selection file is read by this role to determine which models to assign to
-each slot. Schema:
+`playbooks/04_models.yml` reads `benchmarks/results/model_selection.json`:
 
 ```json
 {
-  "timestamp": "2025-01-15T10:30:00Z",
-  "slot1_coding": "qwen2.5-coder:14b",
-  "slot2_general": "llama3.1:8b",
-  "slot3_backup": "deepseek-coder-v2:16b",
-  "slot4_experimental": null
+  "slot1_general": "llama3.1:8b",
+  "slot2_general": "mistral:latest",
+  "slot5_general_rotate": "llama3.2:3b",
+  "slot3_coding": "deepseek-coder-v2:16b",
+  "slot4_coding": "qwen2.5-coder:7b",
+  "slot6_coding_rotate": "codegemma:7b",
+  "general_ranking": [...],
+  "coding_ranking": [...],
+  "all_metrics": { ... }
 }
 ```
-
-If `model_selection.json` does not exist (first run before benchmarks), the role
-falls back to default models defined in `group_vars/all.yml`.
 
 ## Tags
 
 ```bash
-ansible-playbook playbooks/site.yml --tags models
-ansible-playbook playbooks/site.yml --tags warmup
+ansible-playbook playbooks/site.yml --tags models -K -e @local.yml
+ansible-playbook playbooks/site.yml --tags models-warmup -K -e @local.yml
 ```

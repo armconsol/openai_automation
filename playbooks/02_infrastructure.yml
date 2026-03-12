@@ -155,6 +155,42 @@
       tags:
         - ollama
 
+    - name: "Ollama | Deploy ollama-node0 systemd unit"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/ollama/ollama-node0.service.j2"
+        dest: /etc/systemd/system/ollama-node0.service
+        mode: "0644"
+        owner: root
+        group: root
+      notify:
+        - Reload systemd and start ollama-node0
+      tags:
+        - ollama
+
+    - name: "Ollama | Enable and start ollama-node0"
+      ansible.builtin.systemd:
+        name: ollama-node0
+        enabled: true
+        state: started
+        daemon_reload: true
+      tags:
+        - ollama
+
+    - name: "Ollama | Wait for ollama-node0 API to be ready"
+      ansible.builtin.uri:
+        url: "http://localhost:{{ ollama_node0_port }}/api/tags"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ ollama_api_key }}"
+        status_code: 200
+        timeout: 10
+      register: ollama_node0_ready
+      retries: 24
+      delay: 5
+      until: ollama_node0_ready.status == 200
+      tags:
+        - ollama
+
     # ── OS-level kernel tuning for dedicated inference server ────────────────
     - name: "OS Tune | Apply sysctl settings for inference workload"
       ansible.posix.sysctl:
@@ -164,8 +200,8 @@
         reload: true
         state: present
       loop:
-        # Disable auto-NUMA migration — fights explicit numactl --membind=1 by
-        # moving KV-cache pages mid-inference to a different NUMA node.
+        # Disable auto-NUMA migration — CPUAffinity pins Ollama to node 1/0
+        # physical cores; NUMA balancing could migrate pages mid-inference.
         - { name: kernel.numa_balancing, value: "0" }
         # Near-zero swappiness: prevents model weights being paged out under
         # memory pressure (complements LimitMEMLOCK=infinity in the unit file).
@@ -259,6 +295,12 @@
       ansible.builtin.systemd:
         name: ollama
         state: restarted
+        daemon_reload: true
+
+    - name: Reload systemd and start ollama-node0
+      ansible.builtin.systemd:
+        name: ollama-node0
+        state: started
         daemon_reload: true
 
     - name: Reload systemd daemon

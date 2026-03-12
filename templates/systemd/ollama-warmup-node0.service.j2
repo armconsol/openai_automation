@@ -1,0 +1,14 @@
+[Unit]
+Description=Ollama Model Warm-Up — Node 0 (Coding)
+After=ollama-node0.service
+Requires=ollama-node0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/ollama-warmup-node0.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

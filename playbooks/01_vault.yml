@@ -132,12 +132,14 @@
       register: vault_init_check
       tags:
         - vault-init
+        - vault-unseal
 
     - name: "Vault | Set initialization status fact"
       ansible.builtin.set_fact:
         vault_is_initialized: "{{ vault_init_check.status != 501 }}"
       tags:
         - vault-init
+        - vault-unseal
 
     - name: "Vault | Initialize Vault"
       ansible.builtin.command:
@@ -234,6 +236,47 @@
       when: vault_seal_status.json.sealed | default(true)
       tags:
         - vault-unseal
+
+    # ── Auto-unseal on reboot ─────────────────────────────────────────
+    - name: "Vault | Deploy unseal key to server"
+      ansible.builtin.copy:
+        content: "{{ vault_init_data.unseal_keys_b64[0] }}"
+        dest: /etc/vault.d/unseal.key
+        owner: root
+        group: root
+        mode: "0400"
+      tags:
+        - vault-unseal
+        - vault-autounseal
+
+    - name: "Vault | Deploy vault-unseal.sh"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/vault/vault-unseal.sh.j2"
+        dest: /usr/local/bin/vault-unseal.sh
+        owner: root
+        group: root
+        mode: "0750"
+      tags:
+        - vault-autounseal
+
+    - name: "Vault | Deploy vault-unseal.service"
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../templates/vault/vault-unseal.service.j2"
+        dest: /etc/systemd/system/vault-unseal.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload systemd and restart vault-unseal
+      tags:
+        - vault-autounseal
+
+    - name: "Vault | Enable vault-unseal.service"
+      ansible.builtin.systemd:
+        name: vault-unseal.service
+        enabled: true
+        daemon_reload: true
+      tags:
+        - vault-autounseal
 
     - name: "Vault | Set root token fact"
       ansible.builtin.set_fact:
@@ -514,5 +557,11 @@
     - name: Restart vault
       ansible.builtin.systemd:
         name: vault
+        state: restarted
+        daemon_reload: true
+
+    - name: Reload systemd and restart vault-unseal
+      ansible.builtin.systemd:
+        name: vault-unseal.service
         state: restarted
         daemon_reload: true
