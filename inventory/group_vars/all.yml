@@ -107,7 +107,7 @@ benchmark_load_timeout: 180      # seconds — warm-up "Hi" prompt per model bef
 benchmark_small_timeout: 90      # seconds per request, small models (<10 GB)
 benchmark_medium_timeout: 240    # seconds per request, medium models (10–15 GB)
 benchmark_large_timeout: 480     # seconds per request, large models (>15 GB)
-benchmark_num_predict: 300       # cap output tokens per prompt; bounds worst-case at 0.1 tok/sec to ~3000s, at 10 tok/sec to ~30s
+benchmark_num_predict: 500       # cap output tokens; allows full coding responses (def+return+docstring+assert); worst-case: 6.5 tok/s→77s, 22 tok/s→23s
 
 # Explicit category overrides applied before heuristics. Keys are model names as
 # returned by `ollama list`. Valid values: 'coding' or 'general'.
@@ -118,7 +118,7 @@ model_category_overrides: {}
 # These are the minimum set needed to populate all 4 slots with meaningful candidates.
 baseline_models:
   - "llama3.2:3b"
-  - "deepseek-coder-v2"
+  - "deepseek-coder-v2:16b"
   - "qwen2.5-coder:7b"
   - "llama3.1:8b"
 
@@ -128,11 +128,6 @@ candidate_models:
     size_gb: 20
     expected_tokens_sec: 4.5
     reason: "Larger qwen2.5-coder for higher quality"
-    category: coding
-  - name: "deepseek-coder-v2:latest"
-    size_gb: 9
-    expected_tokens_sec: 8.0
-    reason: "DeepSeek Coder V2 full model"
     category: coding
   - name: "codegemma:7b-instruct-q5_K_M"
     size_gb: 5.5
