@@ -7,7 +7,7 @@ Wants=network-online.target
 ExecStart=/usr/bin/numactl --cpunodebind=0 {{ ollama_binary_path }} serve
 Environment="OLLAMA_API_KEY={{ ollama_api_key }}"
 Environment="OLLAMA_HOST=0.0.0.0:{{ ollama_node0_port }}"
-Environment="OLLAMA_MODELS={{ ollama_models_path }}"
+Environment="OLLAMA_MODELS=/mnt/ai_data/ollama_models"
 Environment="OLLAMA_KEEP_ALIVE={{ ollama_keep_alive }}"
 Environment="OLLAMA_FLASH_ATTENTION={{ ollama_flash_attention }}"
 Environment="OLLAMA_NUM_THREADS={{ ollama_num_threads }}"
